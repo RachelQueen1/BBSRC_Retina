@@ -1,0 +1,94 @@
+---
+title: "Annotated Eye and Retina"
+output: html_notebook
+---
+
+## Integration script
+
+integration_from_eye_and_retina_remove_red_blood_cells_increaseMT.Rmd
+
+
+## Filtering applied : 
+
+Any cells which expressed haemoglobin genes were removed from the analysis. 
+
+The mitochondrial threshold 10%
+
+Any samples with more than 4000 cells downsampled to 4000.
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r, libraries}
+
+library(Seurat)
+library(ggplot2)
+library(cowplot)
+library(SCFunctionsV3)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(tidyverse)
+library(DoubletFinder)
+library(pheatmap)
+library(harmony)
+
+
+### Functions
+howManyCells <- function(sObj){dim(sObj)[2]}
+
+
+
+#sampleInfo <- readRDS("../fetal/rObjects/sampleInfo.rds")
+
+
+```
+
+
+## Manual removal clusters
+
+After integration the following clusters were removed:
+
+36- dominated by 16 PCW not present in other stages
+40-mix of markers for lens, Acs and fibroblasts
+41-dominated by 16 PCW
+42- dominated by 16 pcw (lens markers)
+
+```{r, eval = FALSE}
+seuratObj <- readRDS("rObjects/seuratObj_retina_eye_mt10_noHB.rds")
+seuratObj_manual_filtered <- seuratObj[,!seuratObj@active.ident %in% c(36,40,41,42)]
+```
+
+
+
+The remaining clusters were annotated as follows:
+
+
+
+
+
+```{r, eval = FALSE}
+annotations <- read.csv("csvFiles/retina_eye_annotations.txt", sep = "-", header = FALSE)
+colnames(annotations) <- c("Cluster", "Annotation")
+
+
+
+seuratObj_manual_filtered$annotation <- annotations$Annotation[match(seuratObj_manual_filtered$RNA_snn_res.2.2, annotations$Cluster)]
+
+
+seuratObj_annotated <- seuratObj_manual_filtered
+saveRDS(seuratObj_annotated, "rObjects/seuratObj_retina_eye_annotated.rds")
+
+```
+
+
+```{r}
+DimPlot(seuratObj_annotated, 
+        group.by = "annotation", 
+        label = TRUE) + ggsave("images/annotated_data.png")
+```
+
+
