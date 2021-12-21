@@ -1,0 +1,26 @@
+Cluster,Cell_Type
+0,late RPCs
+1,late RPCs
+2,late RPCs
+3,HCs
+4,ACs
+5,ACs
+6,T1
+7,removed_T3
+8,removed_mitotic cells-late RPCs
+9,T2
+10,HCs+Acs
+11,removed_mitotic late RPCs?
+12,removed_mitotic cells
+13,removed_mitotic T1
+14,removed_PRS+ Acs+MITOTIC
+15,late RPCs
+16,removed_RGCs
+17,removed_RGCs?
+18,HCs
+19,removed_mitotic cells
+20,removed_photoreceptor T3?
+21,removed_photoreceptors
+22,removed_mitotic T1?
+
+

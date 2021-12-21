@@ -1,0 +1,195 @@
+---
+title: "`r thetitle`"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r libaries}
+library(dplyr)
+library(Seurat)
+library("ggplot2")
+library(monocle3)
+library(patchwork)
+library(SeuratWrappers)
+library(harmony)
+library(ggplotify)
+sobjToCds <- function(sObj){
+  harmonyLoadings <- sObj@reductions[["harmony"]]@feature.loadings.projected
+  sObj <- DietSeurat(sObj, graphs = "umap")
+  cds <- as.cell_data_set(sObj)
+  cds <- cluster_cells(cds, reduction_method = "UMAP", k = 15)
+  cds <- learn_graph(cds, use_partition = FALSE)
+  ## Add gene names into CDS
+  rowData(cds)$gene_name <- rownames(cds)
+  rowData(cds)$gene_short_name <- rowData(cds)$gene_name
+  ## estimate size factors
+  cds <- estimate_size_factors(
+  cds,
+  round_exprs = TRUE,
+  method = c("mean-geometric-mean-total", "mean-geometric-mean-log-total")
+)
+  # add harmony reduction
+  cds@preprocess_aux$gene_loadings <- harmonyLoadings
+  
+  
+return(cds)
+}
+
+seuratObj <- readRDS("../rObjects/seuratObj_retina_eye_annotated.rds")
+## add consensus clusters
+cellAnnoWide <- readRDS("rObjects/cellAnnoWide.rds")
+cellAnnoWide <- cellAnnoWide[colnames(seuratObj), ]
+cellAnnoWide$consensus[seuratObj@active.ident == 30] <- "RGCs"
+seuratObj$consensus <- cellAnnoWide$consensus %>% gsub("early ", "", .) %>% gsub("late ", "", .) 
+seuratObj$consensus <- seuratObj$consensus %>% gsub("removed_", "", .) 
+
+seuratObj_subset <- readRDS(paste0("rObjects/seurat_subset_", outName, ".rds"))
+cds_subset_cc <- readRDS(paste0("rObjects/cds_", outName, ".rds"))
+
+subsets <- readRDS("rObjects/subsets_list_consensus.rds")
+startingNode <- read.csv("StartNode/startingNodes", row.names = 1)[outName,]
+
+```
+
+
+
+# With cell cycle regression
+
+
+```{r}
+clustersUse <- subsets[[outName]]
+
+## subset_trajectory.R
+```
+
+Cells from  `r paste0(clustersUse, collapse = ",")` were selected. The cells selected are shown below:
+
+```{r}
+seuratObj$cellSelected <- NA
+seuratObj$cellSelected[colnames(seuratObj_subset)] <- seuratObj_subset$consensus
+DimPlot(seuratObj, group.by = "cellSelected")
+```
+
+
+### Clustering and annotation
+
+Cell cycle regression and harmony batch correction performed.The new clusters are shown below:  
+
+
+
+
+```{r, fig.width=20, fig.height = 15}
+p1 <- DimPlot(seuratObj_subset, label = TRUE, group.by = "consensus") +   ggtitle("new annotation") 
+
+p2 <- DimPlot(seuratObj_subset, group.by = "RNA_snn_res.1", label = TRUE)  + ggtitle("new clusters")
+
+p1 + p2 
+```
+
+## Pseudotime analysis
+
+Monocle 3 was used to learn the trajectory in the data and the cells were ordered by pseudotime. Node `r startingNode`, was used as the starting point for the trajectory. 
+
+```{r}
+# convert_seurat_to_cds.R 
+```
+
+```{r, fig.width = 10, fig.height=10}
+cds_subset_cc <- order_cells(cds_subset_cc, root_pr_nodes = startingNode)
+plot_cells(cds_subset_cc, 
+           label_principal_points = TRUE, 
+           color_cells_by = "annotation"
+           )
+```
+
+
+## Pseudotime Ordering
+
+The pseudotime ordering is shown below.
+
+```{r, fig.width = 10, fig.height=10}
+plot_cells(cds_subset_cc, 
+           label_principal_points = TRUE, 
+           color_cells_by = "pseudotime"
+           )
+```
+
+
+## Markers for each cluster
+
+Markers were then found for each of the new clusters. 
+
+```{r, eval = FALSE}
+# find_markers.R
+```
+
+```{r, fig.width= 20,fig.height=20}
+
+seuratObj_subset <- SetIdent(seuratObj_subset, value = "consensus")
+cellTypes <- seuratObj_subset$consensus %>% unique()
+
+cellTypeOrder <- read.csv("annotations/cellTypeOrder.csv", 
+                          header = FALSE, 
+                          stringsAsFactors = FALSE)$V1 
+
+clusterOrder <- cellTypeOrder[cellTypeOrder %in% cellTypes]
+
+
+library(pheatmap)
+library(viridis)
+
+
+markers <- read.csv(paste0("csvFiles/", outName, ".csv"), row.names = 1)
+markers$cluster <- markers$cluster %>%  factor(levels = clusterOrder )
+
+seuratObj_subset$consensus2 <- seuratObj_subset$consensus %>% factor(levels = clusterOrder)
+
+
+seuratObj_subset$pseudotime <- pseudotime(cds_subset_cc)
+cellOrder <- order(seuratObj_subset$consensus2, rev(seuratObj_subset$pseudotime))
+
+top10 <- markers %>% 
+  filter(avg_log2FC > 0) %>% 
+  arrange(cluster) %>% 
+  group_by(cluster) %>% 
+  top_n(n = 10, wt = avg_log2FC) 
+
+#top10 <- top10[c(-1,-2,-3),]
+
+genesUse <- top10 %>% pull(gene) %>% unique()
+
+
+
+
+md <- seuratObj_subset[[]][cellOrder,c("consensus", "pseudotime", "stage")]
+
+
+
+
+md$stage <-md$stage %>% gsub("PCW", "", .) %>% as.numeric()
+
+breaksList = seq(0, 3, by = .2)
+
+
+exp <- seuratObj_subset@assays$RNA@data[genesUse, cellOrder]
+
+p_heatmap1 <- as.ggplot(pheatmap(exp, 
+         cluster_rows = FALSE, 
+         cluster_cols = FALSE, 
+         show_colnames = FALSE, 
+         annotation_col = md, 
+         color = viridis(15), 
+         scale = "row", 
+         breaks = breaksList
+          ))
+
+
+
+
+```
+

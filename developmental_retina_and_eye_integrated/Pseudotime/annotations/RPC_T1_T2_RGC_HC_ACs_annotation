@@ -1,0 +1,21 @@
+Cluster,Cell_Type
+0,RPCs
+1,RPCs
+2,ACs
+3,HCs
+4,T2
+5,RGCs
+6,ACs
+7,T1
+8,removed_mitotic
+9,RPCs
+10,RGCs
+11,removed_Progenitor markers from T1 and T3
+12,RGCs
+13,RGCs
+14,removed_mitotic
+15,removed_mitotic
+16,RPCs
+17,removed_RGC progenitors in strange place?
+18,HCs
+19,removed_mitotic T1

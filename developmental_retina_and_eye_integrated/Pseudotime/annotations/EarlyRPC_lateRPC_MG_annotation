@@ -1,0 +1,21 @@
+Cluster,Cell_Type
+0,early RPCs
+1,late RPCs
+2,mitotic
+3,late RPCs
+4,early RPCs
+5,MG
+7,late RPCs
+8,late RPCs
+9,removed_early RPCs
+10,removed_PRs
+11,early RPCs
+12,mitotic
+13,removed_NRPCs
+14,MG
+15,removed_NRPCs
+16,removed_RGC progenitors
+17,MG
+18,removed_NRPCs
+
+

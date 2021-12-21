@@ -1,0 +1,22 @@
+Cluster,Cell_Type
+0,late RPCs
+1,late RPCs
+2,rod precursors
+3,photoreceptor precursors
+4,late RPCs
+5,cones
+6,late RPCs
+7,late RPCs
+8,T1
+9,photoreceptor precursors
+10,early RPCs
+11,T3
+12,removed_rod precursors
+12,cluster 12
+13,T1
+14,removed_T1-T2
+15,late RPCs
+16,rods
+17,cone precursors
+18,early RPCs
+
