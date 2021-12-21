@@ -1,0 +1,82 @@
+---
+title: "`r thetitle`"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r libaries}
+library(dplyr)
+library(Seurat)
+library("ggplot2")
+library(monocle3)
+library(patchwork)
+library(SeuratWrappers)
+library(harmony)
+library(ggplotify)
+sobjToCds <- function(sObj){
+  harmonyLoadings <- sObj@reductions[["harmony"]]@feature.loadings.projected
+  sObj <- DietSeurat(sObj, graphs = "umap")
+  cds <- as.cell_data_set(sObj)
+  cds <- cluster_cells(cds, reduction_method = "UMAP", k = 15)
+  cds <- learn_graph(cds, use_partition = FALSE)
+  ## Add gene names into CDS
+  rowData(cds)$gene_name <- rownames(cds)
+  rowData(cds)$gene_short_name <- rowData(cds)$gene_name
+  ## estimate size factors
+  cds <- estimate_size_factors(
+  cds,
+  round_exprs = TRUE,
+  method = c("mean-geometric-mean-total", "mean-geometric-mean-log-total")
+)
+  # add harmony reduction
+  cds@preprocess_aux$gene_loadings <- harmonyLoadings
+  
+  
+return(cds)
+}
+
+
+
+
+#cds <- readRDS("rObjects/cds_seurat_object_without14149.rds")
+seuratObj <- readRDS("../rObjects/seuratObj_retina_eye_annotated.rds")
+
+#outName <- "T3_PR_BP"
+
+seuratObj_subset <- readRDS(paste0("rObjects/seurat_subset_", outName, ".rds"))
+#cds_subset_cc <- readRDS(paste0("rObjects/cds_subset_", outName, ".rds"))
+```
+
+
+
+# With cell cycle regression
+
+Clusters `r paste0(clustersUse, collapse = ",")` were selected and cell cycle regression performed.
+
+```{r, eval = FALSE}
+## subset_trajectory.R
+```
+
+```{r, fig.width = 15, fig.height=15}
+
+p1 <- DimPlot(seuratObj_subset, group.by = "annotation", label = TRUE) + ggtitle("original annotation")
+p3 <- DimPlot(seuratObj_subset, label = TRUE) + ggtitle("new clusters")
+p1 + p3
+```
+
+
+Monocle was then used to learn the trajectory.
+
+```{r}
+cds_subset_cc <- sobjToCds(seuratObj_subset)
+plot_cells(cds_subset_cc, 
+           label_principal_points = TRUE, 
+           color_cells_by = "annotation"
+           )
+```
+
