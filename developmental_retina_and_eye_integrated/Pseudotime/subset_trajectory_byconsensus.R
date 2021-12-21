@@ -43,17 +43,8 @@ DimPlot(seuratObj, group.by = "consensus_e_l", label = TRUE)
 subsets <- list()
 subsets[["RPC_T2_HCs_Acs"]] <- c("RPCs", "T1", "T2",  "HCs", "ACs")
 subsets[["RPC_T1_T2_RGC_HC_ACs"]] <- c("RPCs", "T1", "T2", "RGCs", "HCs", "ACs")
-subsets[["Early_Late_RPCs_MG"]] <- c("RPCs", "MG")
-subsets[["RPCs_MG"]] <- c("RPCs", "MG")
 subsets[["T1_T3_PR_BP"]] <- c("T1", "T3", "rod precursors", "rods", "cone precursors", "cones" , "BPs")
-# subsets[["RPC_T2_HC+ACS_HCs_Acs"]] <- c("RPCs", "T1", "T2",  "HCs", "ACs", "HC+AC precursors")
-# subsets[["RPC_T2_HC+ACS_HCs_Acs"]] <- c("RPCs", "T1", "T2",  "HCs", "ACs", "HC+AC precursors")
-#subsets[["RPC_T1_RGC"]] <- c("RPCs", "T1", "T2", "RGCs")
-#subsets[["RPC_T2_HC+AC_HCs"]] <- c("RPCs", "T1", "T2",  "HCs", "HC+AC precursors")
-# subsets[["RPC_T1_T2_RGC_HC_ACs"]] <- c("RPCs", "T1", "T2", "RGCs", "HCs", "ACs", "HC+AC precursors")
-# subsets[["RPC_T2_HC+ACS_Acs"]] <- c("RPCs", "T1", "T2",  "ACs", "HC+AC precursors")
-# subsets[["Early_Late_RPCs_MG"]] <- c("RPCs", "MG")
-# subsets[["RPCs_MG"]] <- c("RPCs", "MG")
+
 saveRDS(subsets, "rObjects/subsets_list_consensus.rds")
 
 
