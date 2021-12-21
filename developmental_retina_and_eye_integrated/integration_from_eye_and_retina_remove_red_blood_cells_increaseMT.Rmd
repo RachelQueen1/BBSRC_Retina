@@ -1,0 +1,480 @@
+---
+title: "Whole Eye and Retina  samples"
+output:
+  html_document:
+    df_print: paged
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r, libraries}
+
+library(Seurat)
+library(cowplot)
+library(SCFunctionsV3)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(tidyverse)
+library(DoubletFinder)
+library(pheatmap)
+library(harmony)
+
+
+### Functions
+howManyCells <- function(sObj){dim(sObj)[2]}
+
+
+
+#sampleInfo <- readRDS("../fetal/rObjects/sampleInfo.rds")
+
+seuratObj <- readRDS("rObjects/seuratObj_retina_eye_mt10_noHB.rds")
+```
+
+
+## Filtering of Red blood cells and mitochondrial reads
+
+Any cells which expressed haemoglobin genes were removed from the analysis. The mitochondrial threshold was decreased from 20% to 10%
+
+Any samples with more than 4000 cells downsampled to 4000.
+
+```{r}
+#sampleInfo 
+```
+
+
+
+```{r, D10, eval = FALSE}
+## filter_hb_mt_integrate_find_markers_Retina_eye.R
+### Functions
+howManyCells <- function(sObj){dim(sObj)[2]}
+## downsample to 4000
+downsample <- function(sObj, no_cells = 4000){
+  if (howManyCells(sObj) >  no_cells){
+    set.seed(1234)
+    s <- sample(1:howManyCells(sObj), no_cells, replace = FALSE)
+    sObj<- sObj[,s]}
+  return(sObj)
+}
+
+## read in QCed data
+seuratObj_retina <- readRDS("../fetal/rObjects/sObj_Filtered.rds")
+seuratObj_eye <- readRDS("../../Eye/rObjects/sObj_eye.rds")
+seuratObj_list <- c(seuratObj_retina, seuratObj_eye)
+
+
+## remove, HB cells, change mitchondrial threshold to 10% and downsample to 4000
+sObj_filtered <- list()
+## remove hb and set mitochondrial threshold to 10%
+dontuse <- c("HBP1", "HBEGF", "HBS1L")
+
+
+
+for (i in 1:length(seuratObj_list)){
+  
+  sObj <- seuratObj_list[[i]]
+  HB_sample <- rownames(seuratObj_list[[i]])[grepl("^HB", rownames(seuratObj_list[[i]]))]
+  HB_sample <- setdiff(HB_sample, dontuse)
+  
+  if (length(HB_sample) == 1){
+    numberHB <- sObj@assays$RNA@counts[HB_sample, ]
+  } else{
+    numberHB <- sObj@assays$RNA@counts[HB_sample, ] %>% colSums()
+  }
+  
+  ## remove high mitochondrial
+  filter <- sObj$percent.mt < 10 & 
+    numberHB == 0
+  
+  sObj <- sObj[,filter]
+  
+  
+  # downsample to 4000
+  sObj_filtered[[i]] <- downsample(sObj)
+}
+
+
+## merge objects
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+sObj_ds <- merge(sObj_filtered[[1]], sObj_filtered[c(1:16, 18:24)]) %>% 
+  CellCycleScoring(s.features = s.genes, 
+                   g2m.features = g2m.genes, 
+                   set.ident = FALSE)
+
+sObj_ds$version <- 3
+sObj_ds$version[grepl(14149, sObj_ds$sample)]
+
+
+seuratObj <- sObj_ds %>%
+  Seurat::NormalizeData(verbose = FALSE) %>%
+  FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>% 
+  ScaleData(verbose = FALSE, 
+            vars.to.regress = c("percent.mt", 
+                                "nCount_RNA", 
+                                "nFeature_RNA")) %>% 
+  RunPCA(pc.genes = seuratObj_ds@var.genes, npcs = 20, verbose = FALSE) %>%
+  RunHarmony(c("sample", "version"), plot_convergence = TRUE) %>% 
+  RunUMAP(reduction = "harmony", dims = 1:10) %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = c(0.2,1,2.2))
+
+
+#seuratObj$stage.2 <- seuratObj$stage
+seuratObj$stage <- seuratObj$stage %>% gsub("PCW.*", "PCW", .) 
+seuratObj$tissue <- ifelse(is.na(seuratObj$sample), yes = "eye", no = "retina")
+seuratObj$sample[is.na(seuratObj$sample)] <- seuratObj$orig.ident[is.na(seuratObj$sample)]
+
+saveRDS(seuratObj, "rObjects/seuratObj_retina_eye_mt10_noHB.rds")
+
+```
+
+```{r, eval = FALSE}
+
+## Don't use
+library(clustree)
+
+seuratObj[["RNA_snn_res.0.4"]] <- NULL
+seuratObj[["RNA_snn_res.0.6"]] <- NULL
+seuratObj[["RNA_snn_res.0.8"]] <- NULL
+seuratObj[["RNA_snn_res.1"]] <- NULL
+
+seuratObj[["RNA_snn_res.1.4"]] <- NULL
+seuratObj[["RNA_snn_res.1.6"]] <- NULL
+seuratObj[["RNA_snn_res.1.8"]] <- NULL
+seuratObj[["RNA_snn_res.2"]] <- NULL
+
+
+
+p_clus <- clustree(seuratObj,prefix = "RNA_snn_res." )
+
+p_clus_res2.2 <- p_clus$data %>% filter(RNA_snn_res. == 2.2)
+
+```
+
+## Check for technical differences
+
+There was variable proportions of mitochondrial reads and number of genes and counts across samples. These features were regressed out and harmony batch correction applied.
+
+```{r}
+seuratObj$sample <- paste(seuratObj$sample, seuratObj$tissue, sep = "_")
+VlnPlot(seuratObj, group.by = "sample", features = c("nCount_RNA", "nFeature_RNA", "percent.mt"), pt.size = 0)
+```
+
+
+
+
+
+## Integrated data
+
+There is a lot of overlap between the datasets. 
+
+```{r, fig.width=25, fig.height = 15}
+p1 <- DimPlot(seuratObj, group.by = "sample")
+p2 <- DimPlot(seuratObj, label = TRUE)
+p3 <- DimPlot(seuratObj, group.by = "Phase")
+p4 <- DimPlot(seuratObj, group.by = "stage")
+p2 + p3 + p1 + p4 
+
+```
+
+
+
+```{r}
+number_cells <- seuratObj[[]] %>% select(c("RNA_snn_res.2.2")) %>% group_by(RNA_snn_res.2.2) %>% summarise(number_cells = n()) %>%
+  ggplot(aes(RNA_snn_res.2.2, number_cells, fill = RNA_snn_res.2.2)) + 
+  geom_bar(stat =  "identity")
+
+
+```
+
+
+
+## Numbers of Cells for each stage
+
+The cell numbers were normalised for each developmental stage and then the percentage of cells from each stage within a cluster was calulated. There are a number of clusters dominated by 16PCW.
+
+```{r, fig.height = 15, fig.width= 15}
+number_cells <- seuratObj[[]] %>% select(c("stage", "RNA_snn_res.2.2")) %>% group_by(stage, RNA_snn_res.2.2) %>% summarise(number_cells = n()) %>% dplyr::rename(cluster = "RNA_snn_res.2.2")
+
+numberStage <- seuratObj[[]] %>% select(c("stage")) %>% group_by(stage) %>% summarise(number_per_stage = n())
+
+number_cells <- number_cells %>% left_join(numberStage)
+
+number_cells$percentage_cells <- number_cells$number_cells/number_cells$number_per_stage * 100
+
+number_cells <- number_cells %>% group_by(cluster) %>% summarise(normalised_number_cells_per_cluster= sum(percentage_cells)) %>%  right_join(number_cells)
+
+number_cells$normalised_number_cells <- number_cells$percentage_cells / number_cells$normalised_number_cells_per_cluster * 100
+
+
+
+number_cells %>% ggplot(aes(stage, normalised_number_cells, fill = stage)) + 
+  geom_bar(stat =  "identity") +
+  facet_wrap(~cluster, scales="free_y", drop = FALSE) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) 
+  
+
+
+
+```
+
+## Numbers of Cells for each sample
+
+```{r, fig.height = 15, fig.width= 15}
+number_cells <- seuratObj[[]] %>% select(c("sample", "RNA_snn_res.2.2")) %>% group_by(sample, RNA_snn_res.2.2) %>% summarise(number_cells = n()) %>% dplyr::rename(cluster = "RNA_snn_res.2.2")
+
+numbersample <- seuratObj[[]] %>% select(c("sample")) %>% group_by(sample) %>% summarise(number_per_sample = n())
+
+number_cells <- number_cells %>% left_join(numbersample)
+
+number_cells$percentage_cells <- number_cells$number_cells/number_cells$number_per_sample * 100
+
+number_cells <- number_cells %>% group_by(cluster) %>% summarise(normalised_number_cells_per_cluster= sum(percentage_cells)) %>%  right_join(number_cells)
+
+number_cells$normalised_number_cells <- number_cells$percentage_cells / number_cells$normalised_number_cells_per_cluster * 100
+
+
+
+number_cells %>% ggplot(aes(sample, normalised_number_cells, fill = sample)) + 
+  geom_bar(stat =  "identity") +
+  facet_wrap(~cluster, scales="free_y", drop = FALSE) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) 
+  
+
+
+
+```
+
+
+
+
+```{r, eval = FALSE}
+markers <- FindAllMarkers(seuratObj, logfc.threshold = 0.7)## DE
+
+markers <- markers %>% dplyr::arrange(cluster, desc(avg_log2FC))
+  
+fName <- paste0("csvFiles/", "retina_noHB", ".csv")
+write.csv(markers, fName)
+fName <- gsub("csvFiles", "rObjects", fName) %>% gsub(".csv", ".rds", .)
+saveRDS(markers, fName)
+
+```
+
+
+```{r}
+GeneUMAP <- function(gene, seuratObj, celltype){
+  p1 <- FeaturePlot(seuratObj, features = gene, 
+                    min.cutoff = "q1", 
+                    cols = c("#E5E5E5", "#FF0000"), 
+                    label = TRUE, order = TRUE, label.size = 2
+                    ) +
+    theme(panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        text = element_text(size=10)) 
+    
+ 
+# p1 <- p1 + ggsave(paste0("highRes/umap_gene_plots/", celltype, gene, ".tiff"), width = 3, height = 3)
+return(p1)
+}
+
+
+RPC_EyeField <- c("LIN28A", "SFRP2", "SFRP1", "SOX2","MKI67", "HES5", "HMGA1", "HMGA2", "HMGB1", "HMGB2", "FZD5", "DLK1", "SPP1", "CDK1", "PAX6", "RAX")
+RPC_EyeField <- intersect(RPC_EyeField, rownames(seuratObj))
+RPC_list <- lapply(RPC_EyeField, GeneUMAP, seuratObj = seuratObj, celltype = "RPC_EyeField_")
+
+
+RGCs <- c("GAP43", "NEUROD6", "STMN2", "SNCG", "ELAVL3", "POU4F2")
+#setdiff(RGCs, rownames(seuratObj))
+RGCs_list <- lapply(RGCs, GeneUMAP, seuratObj = seuratObj, celltype = "RGCs_")
+
+
+MG <- c("CLU", "VIM", "RLBP1", "CRYAB", "CRABP1")
+#setdiff(MG, rownames(seuratObj))
+MG_list <- lapply(MG, GeneUMAP, seuratObj = seuratObj, celltype = "MG_")
+
+
+HCs <- c("ONECUT1", "ONECUT2", "PROX1")
+#setdiff(HCs, rownames(seuratObj))
+HCs_list <- lapply(HCs, GeneUMAP, seuratObj = seuratObj, celltype = "HCs_")
+
+
+ACs <- c("TFAP2A", "LHX9")
+#setdiff(ACs, rownames(seuratObj))
+ACs_list <- lapply(ACs, GeneUMAP, seuratObj = seuratObj, celltype = "ACs_")
+
+# cluster0 <- c("PAX6", "SOX2", "RAX", "VSX2", "OTX1", "AQP1", "ZIC1", "FUT4", "RDH10", "CDO1", "MSX1", "WNT2B", "SFRP1", "SFRP2", "FGF3", "ETV1", "ETV6", "FOXP1", "LIN28A")
+# 
+# #setdiff(cluster0, rownames(seuratObj))
+# cluster0_list <- lapply(cluster0, GeneUMAP, seuratObj = seuratObj, celltype = "cluster0_")
+
+Forebrain_NSC <- c("EMX2", "FGFR3", "FOXG1", "FOXM1")
+#setdiff(Forebrain_NSC, rownames(seuratObj))
+Forebrain_NSC_list <- lapply(Forebrain_NSC, GeneUMAP, seuratObj = seuratObj, celltype = "Forebrain_NSC_markers_")
+
+Astrocytes <- c("ALDH1A1", "GFAP", "ANGPT1")
+#setdiff(Astrocytes, rownames(seuratObj))
+Astrocytes_list <- lapply(Astrocytes, GeneUMAP, seuratObj = seuratObj, celltype = "Astrocytes_")
+
+RET_neuroepi <- c("LHX5", "NNAT")
+#setdiff(RET_neuroepi, rownames(seuratObj))
+RET_neuroepi_list <- lapply(RET_neuroepi, GeneUMAP, seuratObj = seuratObj, celltype = "RET_neuroepi_")
+
+
+PSCs <- c("TDGF1", "POU5F1")
+#setdiff(PSCs, rownames(seuratObj))
+PSCs_list <- lapply(PSCs, GeneUMAP, seuratObj = seuratObj, celltype = "PSCs_")
+
+RODS <- c("NRL", "GNAT1", "PDE6G", "NR2E3", "RHO", "GNGT1")
+RODS <- intersect(RODS, rownames(seuratObj))
+RODS_list <- lapply(RODS, GeneUMAP, seuratObj = seuratObj, celltype = "RODS_")
+
+
+RPE <- c("TYR", "BEST1", "PMEL", "RPE65", "TYRP1", "MITF")
+#setdiff(RPE, rownames(seuratObj))
+RPE_list <- lapply(RPE, GeneUMAP, seuratObj = seuratObj, celltype = "RPE_")
+
+
+CONES <- c("GNB3", "RXRG", "ARR3", "CRX", "RCVRN", "PDE6H")
+#setdiff(CONES, rownames(seuratObj))
+CONES_list <- lapply(CONES, GeneUMAP, seuratObj = seuratObj, celltype = "CONES_")
+
+
+T3 <- c("FABP7", "OTX2", "DLL3")
+#setdiff(T3, rownames(seuratObj))
+T3_list <- lapply(T3, GeneUMAP, seuratObj = seuratObj, celltype = "T3_")
+
+ 
+T1 <- c("ATOH7", "HES6", "DLL3")
+#setdiff(T1, rownames(seuratObj))
+T1_list <- lapply(T1, GeneUMAP, seuratObj = seuratObj, celltype = "T1_")
+
+
+
+T2 <- c("PRDM13", "PTF1A", "HSPB1")
+#setdiff(T2, rownames(seuratObj))
+T2_list <- lapply(T2, GeneUMAP, seuratObj = seuratObj, celltype = "T2_")
+
+OSE <- c("KRT8", "KRT18", "CXCL14", "KRT15", "KRT19", "KRT7", "KRT13")
+OSE <- intersect(OSE, rownames(seuratObj))
+OSE_list <- lapply(OSE, GeneUMAP, seuratObj = seuratObj, celltype = "OSE_")
+
+BP <- c("VSX1", "VSX2", "CADPS", "GRM6", "GRIK1")
+#setdiff(BP, rownames(seuratObj))
+BP_list <- lapply(BP, GeneUMAP, seuratObj = seuratObj, celltype = "BP_")
+
+
+
+
+```
+
+## FGFR3 and RAX 
+```{r}
+GeneUMAP("RAX", seuratObj)
+GeneUMAP("FGFR3", seuratObj)
+```
+
+
+## RPCs
+
+```{r}
+RPC_list
+
+```
+
+## RGCs
+
+```{r}
+RGCs_list
+```
+
+## MG
+
+```{r}
+MG_list
+```
+
+## HCs
+
+```{r}
+HCs_list
+```
+
+## ACs
+
+```{r}
+ACs_list
+```
+
+## Forebrain
+
+```{r}
+Forebrain_NSC_list
+```
+
+
+## Astrocytes
+
+```{r}
+Astrocytes_list
+```
+
+## PSCs
+
+```{r}
+PSCs_list
+```
+
+## Rods
+
+```{r}
+RODS_list
+```
+
+## RPE
+
+```{r}
+RPE_list
+```
+
+## Cones
+
+```{r}
+CONES_list
+```
+
+## T3
+
+```{r}
+T3_list
+```
+
+## T1
+
+```{r}
+T1_list
+```
+
+## T2
+
+```{r}
+T2_list
+```
+
+## OSE
+
+```{r}
+OSE_list
+```
+
+## BP
+
+```{r}
+BP_list
+```
+
