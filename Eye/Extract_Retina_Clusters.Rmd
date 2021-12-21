@@ -1,0 +1,124 @@
+---
+title: "Retina Clusters Eye Samples"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r, libraries}
+
+library(Seurat)
+library(cowplot)
+library(SCFunctionsV3)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(tidyverse)
+library(DoubletFinder)
+library(pheatmap)
+
+
+### Functions
+howManyCells <- function(sObj){dim(sObj)[2]}
+
+
+
+sObj_Filtered <- readRDS("rObjects/sObj_Filtered.rds")
+
+samples <- list.files("cellranger_data") 
+sampleInfo <- readRDS("rObjects/sampleInfo.rds")
+clustersToUse <- read.csv("clusters_to_use.txt", sep = "\t")
+sampleInfo <- sampleInfo %>% left_join(clustersToUse)
+
+
+name_list <- function(sObj){
+  sample_name <- sObj$orig.ident %>% levels()
+  return(sample_name)
+}
+
+names(sObj_Filtered) <- lapply(sObj_Filtered, 
+                               name_list) %>% unlist()
+
+#re-order to the same as sampleInfo
+sObj_Filtered <- sObj_Filtered[sampleInfo$sample]
+
+
+```
+
+
+Subset retina clusters
+
+
+```{r, fig.height=15, fig.width=15, eval = FALSE}
+sObj_retina <- list()
+
+for (i in which(!is.na(sampleInfo$cluster))){
+  sample <- sampleInfo[i, "sample"]
+  
+  clusters <- sampleInfo[i,"cluster"] %>% 
+    str_split(pattern = ",") %>% 
+    .[[1]] %>% as.numeric()
+  
+  sObj <- sObj_Filtered[[sample]]
+  
+  sObj_retina[[sample]] <- sObj[,sObj@active.ident %in% clusters]
+  
+  sObj_retina[[sample]]$stage <- sampleInfo[i, "stage"]
+  
+  
+}
+
+
+
+saveRDS(sObj_retina, "rObjects/sObj_eye.rds")
+```
+
+```{r}
+sObj_retina <- readRDS("rObjects/sObj_eye.rds")
+```
+
+
+
+```{r}
+PlotUMAP <- function(sObj, type){
+  sample_name <- sObj$orig.ident %>% unique() %>% as.character()
+  sample_name <- paste(sample_name, type)
+  p1 <- DimPlot(sObj, label = TRUE) + ggtitle(sample_name)
+  p1
+}
+
+p_list <- lapply(sObj_retina, PlotUMAP, type = "Extracted clusters")
+p_list2 <- lapply(sObj_Filtered[names(sObj_retina)], PlotUMAP, type = "All Clusters")
+
+p_list3 <- list()
+for (sample in names(p_list)){
+  p1 <- p_list[[sample]]
+  p2 <- p_list2[[sample]]
+  
+  p_list3[[sample]] <- p2 + p1
+}
+
+
+```
+
+
+```{r}
+p_list3
+```
+
+Rax Expression
+```{r}
+##plot samples
+plotRAX <- function(sObj){
+  p1 <- FeaturePlot(sObj, label = TRUE, features = "RAX", min.cutoff = "q1", cols = c("lightgrey", "red"), pt.size = 2) + ggtitle(paste(sObj$orig.ident, sObj$stage))
+  return(p1)}
+
+lapply(sObj_retina, plotRAX)
+
+
+```
+
+
