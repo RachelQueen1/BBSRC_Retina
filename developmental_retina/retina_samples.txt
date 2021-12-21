@@ -1,0 +1,14 @@
+Sample	Stage	FilePath
+10PCW_23_2020	10PCW	/data/rachel/Linda_Lako/Retina/fetal/10PCW/data/10PCW_2020_023
+14680	12PCW	/data/rachel/Linda_Lako/Retina/fetal/12PCW/data/14680_12PCW_2019_065
+14149.1	16PCW	/data/rachel/Linda_Lako/Retina/fetal/15_16PCW/data/14149_16PCW_july2018_1
+14149.2	16PCW	/data/rachel/Linda_Lako/Retina/fetal/15_16PCW/data/14149_16PCW_july2018_2
+14611	15PCW	/data/rachel/Linda_Lako/Retina/fetal/15_16PCW/data/14611_15PCW_2019_065
+14713	16PCW	/data/rachel/Linda_Lako/Retina/fetal/15_16PCW/data/14713_16PCW_2019_51
+14Ret08102020	14PCW	/data/rachel/Linda_Lako/Retina/fetal/additional_samples/data/2020_062_14PCW_14Ret08102020
+15221	17PCW	/data/rachel/Linda_Lako/Retina/fetal/additional_samples/data/2020_062_17PCW_15221
+14556	20PCW	/data/rachel/Linda_Lako/Retina/fetal/20PCW/data/14556_20PCW_2019_045
+15183	21PCW	/data/rachel/Linda_Lako/Retina/fetal/20PCW/data/15183_20PCW_2020_018
+15184	20PCW	/data/rachel/Linda_Lako/Retina/fetal/20PCW/data/15184_21PCW_2020_008
+15232	16PCW	/data/rachel/Linda_Lako/Retina/fetal/additional_samples/data/2020_026_16PCW_15232
+15700	18PCW	/data/rachel/Linda_Lako/Retina/fetal/additional_samples/data/2021_057_18PCW_15700
