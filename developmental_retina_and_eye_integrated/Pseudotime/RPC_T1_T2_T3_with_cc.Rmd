@@ -1,0 +1,580 @@
+---
+title: "RPC_T1_T2_T2_ccRegression"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r libaries}
+library(dplyr)
+library(Seurat)
+library("ggplot2")
+library(monocle3)
+library(patchwork)
+library(SeuratWrappers)
+library(harmony)
+library(ggplotify)
+sobjToCds <- function(sObj){
+  sObj <- DietSeurat(sObj, graphs = "umap")
+  cds <- as.cell_data_set(sObj)
+  cds <- cluster_cells(cds, reduction_method = "UMAP", k = 15)
+  cds <- learn_graph(cds, use_partition = FALSE)
+  ## Add gene names into CDS
+  rowData(cds)$gene_name <- rownames(cds)
+  rowData(cds)$gene_short_name <- rowData(cds)$gene_name
+  ## estimate size factors
+  cds <- estimate_size_factors(
+  cds,
+  round_exprs = TRUE,
+  method = c("mean-geometric-mean-total", "mean-geometric-mean-log-total")
+)
+  # add harmony reduction
+  cds@preprocess_aux$gene_loadings <- sObj@reductions[["harmony"]]@feature.loadings.projected
+  
+  
+return(cds)
+}
+
+
+
+
+cds <- readRDS("rObjects/cds_seurat_object_without14149.rds")
+seuratObj <- readRDS("../rObjects/seuratObj_retina_eye_annotated.rds")
+
+seuratObj_subset <- readRDS("rObjects/seurat_subset_cc_reg.rds")
+cds_subset_cc <- readRDS("rObjects/cds_subset_cc_clusters_removed.rds")
+```
+
+
+
+# With cell cycle regression
+
+Cells from RPCs, T1, T2, T3 were selected and cell cycle regression performed.
+
+```{r, eval = FALSE}
+clustersUse <- c("RPCs", "T1", "T2", "T3")
+
+cc_genes <- c(cc.genes$s.genes, cc.genes$g2m.genes)
+noCC <- !rownames(seuratObj) %in% cc_genes 
+
+seuratObj_subset <- seuratObj[noCC,
+                              seuratObj$annotation %in% clustersUse]
+
+seuratObj_subset <- seuratObj_subset %>%
+  Seurat::NormalizeData(verbose = FALSE) %>%
+  FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>% 
+  ScaleData(verbose = FALSE, 
+            vars.to.regress = c("percent.mt", 
+                                "nCount_RNA", 
+                                "nFeature_RNA", 
+                                "S.Score", 
+                                "G2M.Score")) %>% 
+  RunPCA(pc.genes = seuratObj_ds@var.genes, npcs = 20, verbose = FALSE) %>%
+  RunHarmony(c("sample", "version"), plot_convergence = TRUE) 
+
+
+seuratObj_subset <- seuratObj_subset %>%
+  RunUMAP(reduction = "harmony", dims = 1:10) %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = c(1))
+
+# markers <- FindAllMarkers(seuratObj_subset, logfc.threshold = 0.7)## DE
+# 
+# markers <- markers %>% dplyr::arrange(cluster, desc(avg_log2FC)) 
+# 
+# fName <- paste0("csvFiles/", "RPC_T1_T2_T3_ccRegression", ".csv")
+# write.csv(markers, fName)
+# fName <- gsub("csvFiles", "rObjects", fName) %>% gsub(".csv", ".rds", .)
+# saveRDS(markers, fName)
+
+saveRDS(seuratObj_subset, "rObjects/seurat_subset_cc_reg.rds")
+
+```
+
+
+## Further clustering and annotation
+Cluster 4 containing mitotic RPCs, cluster 12 consisting of PR precursors, and cluster 15  contained RGCs were remvoed. cluster 16 contained a mix of T2+T3 markers and was also removed. The remaining clusters were then annotated. 
+
+
+```{r}
+seuratObj_subset <- seuratObj_subset[,!seuratObj_subset@active.ident %in% c(4,12,15,16)]
+```
+
+
+```{r}
+annotations <- read.csv("annotations/RPC_T1_T2_T3_annotation")
+annotations$Cluster <- factor(annotations$Cluster)
+seuratObj_subset$annotation <- annotations$Cell_Type[match(seuratObj_subset@active.ident, annotations$Cluster)]
+
+```
+
+```{r}
+DimPlot(seuratObj_subset, group.by =  "annotation", label = TRUE) + ggsave("quick_images/annotated_umap_RPC_T1-T2_T3.png")
+```
+
+## Pseudotime analysis
+
+Monocle 3 was used to learn the trajectory in the data and the cells were ordered by pseudotime. Node Y_4 was used as the starting point for the trajectory. 
+
+```{r, eval = FALSE}
+cds_subset_cc <- sobjToCds(seuratObj_subset)
+cds_subset_cc <- order_cells(cds_subset_cc, root_pr_nodes = "Y_4")
+saveRDS(cds_subset_cc, "rObjects/cds_subset_cc_clusters_removed.rds")
+```
+
+```{r, fig.width = 10, fig.height=10}
+plot_cells(cds_subset_cc, 
+           label_principal_points = TRUE, 
+           color_cells_by = "annotation"
+           )
+```
+
+
+## Pseudotime Ordering
+
+The pseudotime ordering is shown below.
+
+```{r, fig.width = 10, fig.height=10}
+plot_cells(cds_subset_cc, 
+           label_principal_points = FALSE, 
+           color_cells_by = "pseudotime"
+           )
+```
+
+## Markers for each cluster
+
+Markers were then found for each of the 6 cell types. The top 5 genes for each cluster are shown in the heatmap below:
+
+```{r, eval = FALSE}
+seuratObj_subset <- SetIdent(seuratObj_subset, value = "annotation")
+markers <- FindAllMarkers(seuratObj_subset, logfc.threshold = 0.7)## DE
+
+markers <- markers %>% dplyr::arrange(cluster, desc(avg_log2FC))
+
+fName <- paste0("csvFiles/", "markers_RPC_T1_T2_T3_ccRegression", ".csv")
+write.csv(markers, fName)
+fName <- gsub("csvFiles", "rObjects", fName) %>% gsub(".csv", ".rds", .)
+saveRDS(markers, fName)
+```
+
+
+```{r}
+markers <- read.csv("csvFiles/markers_RPC_T1_T2_T3_ccRegression.csv", row.names = 1)
+markers$cluster <- markers$cluster %>%  factor(levels = c("early RPCs", "late RPCs",  "T1", "T2", "T1/T3", "T3"))
+
+
+library(pheatmap)
+library(viridis)
+
+
+seuratObj_subset$annotation2 <- seuratObj_subset$annotation %>% 
+  factor(levels = c("early RPCs", 
+                    "late RPCs", 
+                    "T1",  
+                    "T2",  
+                    "T1/T3",
+                    "T3"))
+
+
+
+seuratObj_subset$pseudotime <- pseudotime(cds_subset_cc)
+cellOrder <- order(seuratObj_subset$annotation2, rev(seuratObj_subset$pseudotime))
+
+  
+
+
+top10 <- markers %>% 
+  filter(avg_log2FC > 0) %>% 
+  arrange(cluster) %>% 
+  group_by(cluster) %>% 
+  top_n(n = 10, wt = avg_log2FC) 
+
+#top10 <- top10[c(-1,-2,-3),]
+
+genesUse <- top10 %>% pull(gene) %>% unique()
+
+
+
+
+md <- seuratObj_subset[[]][cellOrder,c("annotation2", "pseudotime", "stage")]
+
+
+
+
+md$stage <-md$stage %>% gsub("PCW", "", .) %>% as.numeric()
+
+breaksList = seq(0, 3, by = .2)
+
+
+exp <- seuratObj_subset@assays$RNA@data[genesUse, cellOrder]
+
+p_heatmap1 <- as.ggplot(pheatmap(exp, 
+         cluster_rows = FALSE, 
+         cluster_cols = FALSE, 
+         show_colnames = FALSE, 
+         annotation_col = md, 
+         color = viridis(15), 
+         scale = "row", 
+         breaks = breaksList
+          ))
+
+ggsave(plot = p_heatmap1, "highRes/marker_heatmap.tiff")
+
+```
+
+### Graph Test Differential Expression Analysis
+
+Monocle graph_test was then used to identify the genes that change as cells progress along the trajectory. 
+
+```{r, eval = FALSE}
+subset_pr_test_res <- graph_test(cds_subset_cc, neighbor_graph="principal_graph", cores=4)
+saveRDS(subset_pr_test_res, "rObjects/subset_pr_test_res_RPC_T1-T3_ccReg_annotated.rds")
+
+```
+
+
+```{r}
+subset_pr_test_res <-readRDS("rObjects/subset_pr_test_res_RPC_T1-T3_ccReg_annotated.rds")
+pr_deg_ids <- row.names(subset(subset_pr_test_res, q_value < 0.01))
+
+gene_module_df <- find_gene_modules(cds_subset_cc[pr_deg_ids,], resolution=0.001, random_seed = 1234 )
+
+agg_mat <- aggregate_gene_expression(cds_subset_cc, 
+                                     gene_module_df)
+
+module_dendro <- hclust(dist(agg_mat))
+
+
+
+gene_module_df$module <- factor(gene_module_df$module, 
+                                levels = row.names(agg_mat)[module_dendro$order])
+
+
+
+subset_pr_test_res$id <- rownames(subset_pr_test_res)
+res <- left_join(gene_module_df, subset_pr_test_res)
+res$module <- res$module %>% factor(levels = 1:7)
+write.csv(res, "csvFiles/modules_RPC_T1_T2_T3_ccReg_clusters_removed.csv")
+
+saveRDS(agg_mat, "rObjects/agg_mat_MG_RPC_T1_T2_T3_ccReg_clusters_removed.rds")
+```
+
+
+# Gene modules
+
+The genes were then grouped into 5 modules 3 supermodules. Supermodules share gene expression profiles.  Super module 1 = modules1 and 4; super module 2 = modules 2 and 3. No cell cycle genes were detected in any of the modules.  
+
+The modules can be viewed on a UMAP. (Each dot represents a gene not a cell)
+
+
+```{r, fig.width= 20,fig.height=20}
+cc.genes <- c(cc.genes$s.genes, cc.genes$g2m.genes)
+gene_module_df$cellcycle <- gene_module_df$id %in% cc.genes
+p1 <- ggplot(gene_module_df, aes(dim_1, dim_2, colour = module)) + geom_point()
+
+p2 <- ggplot(gene_module_df, aes(dim_1, dim_2, colour = supermodule)) + geom_point()
+
+p3 <- ggplot(gene_module_df, aes(dim_1, dim_2, colour = cellcycle)) + geom_point()
+
+
+p1 + p2 + p3
+
+```
+
+
+### Heatmap of genes identified via graph_test and module identification
+
+Genes with an I morans score of greater than 0.3 are shown below.
+
+```{r}
+
+markers_positive <- markers %>% 
+  filter(avg_log2FC > 0) %>% 
+  group_by(gene) %>% 
+  filter(avg_log2FC == max(avg_log2FC))
+
+res_markers <- res %>% 
+  dplyr::rename(gene = id) %>% 
+  left_join(markers_positive) %>%
+  filter(morans_I > 0.25) 
+
+
+
+res_markers$cluster[res_markers$gene == "CKB"] = "late RPCs"
+res_markers$cluster[res_markers$gene == "CRABP1"] = "late RPCs"
+res_markers$cluster[res_markers$gene == "TPRX1"] = "T1+T3"
+
+res_markers <- res_markers %>% 
+  arrange(cluster)
+
+exp2 <- seuratObj_subset@assays$RNA@data[res_markers$gene, cellOrder]
+
+
+p_heatmap2 <- as.ggplot(pheatmap(exp2, 
+         cluster_rows = FALSE, 
+         cluster_cols = FALSE, 
+         show_colnames = FALSE, 
+         annotation_col = md, 
+         color = viridis(15), 
+         scale = "row", 
+         breaks = breaksList
+          ))
+
+
+ggsave(plot = p_heatmap2, "highRes/module_heatmap.tiff")
+```
+
+## Combined heatmap
+```{r}
+markers_modules <- rbind(res_markers[,colnames(top10)], top10) %>% 
+  filter(!duplicated(gene)) %>%
+  arrange(cluster)
+
+exp3 <- seuratObj_subset@assays$RNA@data[markers_modules$gene, cellOrder]
+
+
+p_heatmap3 <- as.ggplot(pheatmap(exp3, 
+         cluster_rows = FALSE, 
+         cluster_cols = FALSE, 
+         show_colnames = FALSE, 
+         annotation_col = md, 
+         color = viridis(15), 
+         scale = "row", 
+         breaks = breaksList
+          ))
+
+
+ggsave(plot = p_heatmap3, "highRes/markers_and_module_heatmap.tiff", width = 9, height = 10)
+
+```
+
+
+
+
+
+# Supermodule 1
+## Module 1
+
+```{r}
+
+i <- 1
+p1 <- plot_cells(cds_subset_cc,
+           genes=gene_module_df %>% filter(module %in% c(i)),
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+p2 <- plot_cells(cds,
+           genes=gene_module_df %>% filter(module %in% c(i)),
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+p1 + p2
+
+```
+
+## Module 4
+```{r}
+
+i <- 4
+p1 <- plot_cells(cds_subset_cc,
+           genes=gene_module_df %>% filter(module %in% c(i)),
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+p2 <- plot_cells(cds,
+           genes=gene_module_df %>% filter(module %in% c(i)),
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+p1 + p2
+
+```
+
+# Supermodule 2
+## Module 2
+
+```{r}
+
+i <- 2
+p1 <- plot_cells(cds_subset_cc,
+           genes=gene_module_df %>% filter(module %in% c(i)),
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+p2 <- plot_cells(cds,
+           genes=gene_module_df %>% filter(module %in% c(i)),
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+p1 + p2
+
+```
+
+
+## Module 3
+
+```{r}
+
+i <- 3
+p1 <- plot_cells(cds_subset_cc,
+           genes=gene_module_df %>% filter(module %in% c(i)),
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+p2 <- plot_cells(cds,
+           genes=gene_module_df %>% filter(module %in% c(i)),
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+p1 + p2
+
+```
+
+
+# Supermodule 3
+## Module 5
+
+```{r}
+
+i <- 5
+p1 <- plot_cells(cds_subset_cc,
+           genes=gene_module_df %>% filter(module %in% c(i)),
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+p2 <- plot_cells(cds,
+           genes=gene_module_df %>% filter(module %in% c(i)),
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+p1 + p2
+
+```
+
+
+
+
+## Plot Genes in Pseudotime
+
+Look for genes that correlate with ATOH7
+
+```{r}
+exprs <- seuratObj_subset@assays$RNA@data
+is.exp <- data.frame(exprs > 0)
+exprs <- exprs[rowSums(is.exp) > 1000, ]
+
+cor_test <-  function(x){cor.test(exprs["ATOH7", ], x, 
+         method = "spearman", 
+         alternative = "two.sided")$estimate}
+
+
+res <- apply(exprs, 1, cor_test)
+saveRDS(res, "rObjects/ATOH7_correlations.rds")
+
+
+genes <- res[order((abs(res)), decreasing = TRUE)][1:5] %>% names()
+
+ATOH7_cds <- cds_subset_cc[rowData(cds_subset_cc)$gene_short_name %in% genes,]
+
+
+plot_genes_in_pseudotime(ATOH7_cds,
+                         color_cells_by="annotation",
+                         min_expr=0.5) + ggsave("quick_images/ATOH7_correlation1.png")
+
+genes <- res[order((abs(res)), decreasing = TRUE)][c(1, 6:9)] %>% names()
+ATOH7_cds <- cds_subset_cc[rowData(cds_subset_cc)$gene_short_name %in% genes,]
+
+
+plot_genes_in_pseudotime(ATOH7_cds,
+                         color_cells_by="annotation",
+                         min_expr=0.5) + ggsave("quick_images/ATOH7_correlation2.png")
+write.csv(res[order((abs(res)), decreasing = TRUE)], "csvFiles/ATOH7_Spearman_Correlation.csv")
+
+```
+
+```{r}
+top20cor <- res[order(res, decreasing = TRUE)][1:20] %>% names()
+
+GeneUMAP <- function(gene, seuratObj){
+  p1 <- FeaturePlot(seuratObj, features = gene, 
+                    min.cutoff = "q1", 
+                    cols = c("#E5E5E5", "#FF0000"), 
+                    label = TRUE, order = TRUE, label.size = 2
+                    ) +
+    theme(panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        text = element_text(size=10)) 
+    
+ 
+p1 <- p1 + ggsave(paste0("highRes/umap_ATOH7/",  gene, ".tiff"), width = 3, height = 3)
+return(p1)
+}
+
+lapply(top20cor, GeneUMAP, seuratObj)
+
+
+
+
+```
+
+
+
+```{r, eval = FALSE}
+# # Pseudotime 
+# 
+# The cells were grouped by pseudotime scores and cell type and the aggregate scores for the modules were plotted below. 
+
+
+breaks <- c(-0.01,5,10,15,20,25)
+labels <- c("0-5", "5-10", "10-15", "15-20", "20-25")
+cds_subset_cc$pt_bins <- cut(pseudotime(cds_subset_cc), breaks = breaks, labels = labels)
+plot_cells(cds_subset_cc, color_cells_by = "pt_bins",
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+seuratObj_subset <- seuratObj_subset[,colnames(cds_subset_cc)]
+seuratObj_subset$module_1 <- agg_mat[1,]
+seuratObj_subset$module_2 <- agg_mat[2,]
+seuratObj_subset$module_3 <- agg_mat[3,]
+seuratObj_subset$module_4 <- agg_mat[4,]
+seuratObj_subset$module_5 <- agg_mat[5,]
+
+
+seuratObj_subset$pt_bins <- cds_subset_cc$pt_bins
+
+p1a <- VlnPlot(seuratObj_subset, group.by = "pt_bins", features = "module_1", pt.size = 0)
+p2a <-VlnPlot(seuratObj_subset, group.by = "pt_bins", features = "module_4", pt.size = 0)
+p3a <-VlnPlot(seuratObj_subset, group.by = "pt_bins", features = "module_2", pt.size = 0)
+p4a <-VlnPlot(seuratObj_subset, group.by = "pt_bins", features = "module_3", pt.size = 0)
+p5a <-VlnPlot(seuratObj_subset, group.by = "pt_bins", features = "module_5", pt.size = 0)
+#p6a <-VlnPlot(seuratObj_subset, group.by = "pt_bins", features = "module_6", pt.size = 0)
+#p7a <-VlnPlot(seuratObj_subset, group.by = "pt_bins", features = "module_7", pt.size = 0)
+
+
+
+p1b <-VlnPlot(seuratObj_subset, group.by = "annotation", features = "module_1", pt.size = 0)
+p2b <-VlnPlot(seuratObj_subset, group.by = "annotation", features = "module_4", pt.size = 0)
+p3b <-VlnPlot(seuratObj_subset, group.by = "annotation", features = "module_2", pt.size = 0)
+p4b <-VlnPlot(seuratObj_subset, group.by = "annotation", features = "module_3", pt.size = 0)
+p5b <-VlnPlot(seuratObj_subset, group.by = "annotation", features = "module_5", pt.size = 0)
+#p6b <-VlnPlot(seuratObj_subset, group.by = "annotation", features = "module_6", pt.size = 0)
+#p7b <-VlnPlot(seuratObj_subset, group.by = "annotation", features = "module_7", pt.size = 0)
+
+
+
+
+p1a + p1b +  plot_layout(ncol=2)
+p2a + p2b +  plot_layout(ncol=2)
+p3a + p3b +  plot_layout(ncol=2)
+p4a + p4b +  plot_layout(ncol=2)
+p5a + p5b +  plot_layout(ncol=2)
+#p6a + p6b +  plot_layout(ncol=2)
+#p7a + p7b +  plot_layout(ncol=2)
+
+```
