@@ -19,6 +19,7 @@ library(SeuratWrappers)
 library(harmony)
 library(ggplotify)
 sobjToCds <- function(sObj){
+  harmony <- sObj@reductions[["harmony"]]@feature.loadings.projected
   sObj <- DietSeurat(sObj, graphs = "umap")
   cds <- as.cell_data_set(sObj)
   cds <- cluster_cells(cds, reduction_method = "UMAP", k = 15)
@@ -33,7 +34,7 @@ sobjToCds <- function(sObj){
   method = c("mean-geometric-mean-total", "mean-geometric-mean-log-total")
 )
   # add harmony reduction
-  cds@preprocess_aux$gene_loadings <- sObj@reductions[["harmony"]]@feature.loadings.projected
+  cds@preprocess_aux$gene_loadings <- harmony
   
   
 return(cds)
@@ -105,31 +106,40 @@ seuratObj_subset <- seuratObj_subset[,!seuratObj_subset@active.ident %in% c(4,12
 ```
 
 
+```{r, eval = FALSE}
+annotations <- read.csv("annotations/RPC_T1_T2_T3_annotation")
+annotations$Cluster <- factor(annotations$Cluster)
+seuratObj_subset$consensus <- annotations$Cell_Type[match(seuratObj_subset@active.ident, annotations$Cluster)]
+
+saveRDS(seuratObj_subset, "rObjects/seurat_subset_RPC_T1_T2_T3.rds")
+```
+
+
 ```{r}
 annotations <- read.csv("annotations/RPC_T1_T2_T3_annotation")
 annotations$Cluster <- factor(annotations$Cluster)
 seuratObj_subset$annotation <- annotations$Cell_Type[match(seuratObj_subset@active.ident, annotations$Cluster)]
-
 ```
 
+
 ```{r}
-DimPlot(seuratObj_subset, group.by =  "annotation", label = TRUE) + ggsave("quick_images/annotated_umap_RPC_T1-T2_T3.png")
+DimPlot(seuratObj_subset, group.by =  "consensus", label = TRUE) + ggsave("quick_images/annotated_umap_RPC_T1-T2_T3.png")
 ```
 
 ## Pseudotime analysis
 
-Monocle 3 was used to learn the trajectory in the data and the cells were ordered by pseudotime. Node Y_4 was used as the starting point for the trajectory. 
+Monocle 3 was used to learn the trajectory in the data and the cells were ordered by pseudotime. Node Y_84 was used as the starting point for the trajectory. 
 
 ```{r, eval = FALSE}
 cds_subset_cc <- sobjToCds(seuratObj_subset)
-cds_subset_cc <- order_cells(cds_subset_cc, root_pr_nodes = "Y_4")
-saveRDS(cds_subset_cc, "rObjects/cds_subset_cc_clusters_removed.rds")
+cds_subset_cc <- order_cells(cds_subset_cc, root_pr_nodes = "Y_84")
+saveRDS(cds_subset_cc, "rObjects/cds_subset_RPC_T1_T2_T3.rds")
 ```
 
 ```{r, fig.width = 10, fig.height=10}
 plot_cells(cds_subset_cc, 
            label_principal_points = TRUE, 
-           color_cells_by = "annotation"
+           color_cells_by = "consensus"
            )
 ```
 
@@ -155,7 +165,7 @@ markers <- FindAllMarkers(seuratObj_subset, logfc.threshold = 0.7)## DE
 
 markers <- markers %>% dplyr::arrange(cluster, desc(avg_log2FC))
 
-fName <- paste0("csvFiles/", "markers_RPC_T1_T2_T3_ccRegression", ".csv")
+fName <- paste0("csvFiles/", "markers_RPC_T1_T2_T3_ccRegression_2022", ".csv")
 write.csv(markers, fName)
 fName <- gsub("csvFiles", "rObjects", fName) %>% gsub(".csv", ".rds", .)
 saveRDS(markers, fName)
@@ -163,7 +173,7 @@ saveRDS(markers, fName)
 
 
 ```{r}
-markers <- read.csv("csvFiles/markers_RPC_T1_T2_T3_ccRegression.csv", row.names = 1)
+markers <- read.csv("csvFiles/markers_RPC_T1_T2_T3_ccRegression_2022.csv", row.names = 1)
 markers$cluster <- markers$cluster %>%  factor(levels = c("early RPCs", "late RPCs",  "T1", "T2", "T1/T3", "T3"))
 
 
@@ -225,6 +235,75 @@ p_heatmap1 <- as.ggplot(pheatmap(exp,
 ggsave(plot = p_heatmap1, "highRes/marker_heatmap.tiff")
 
 ```
+
+
+## Plot Genes in Pseudotime
+
+Look for genes that correlate with ATOH7
+
+```{r}
+exprs <- seuratObj_subset@assays$RNA@data
+is.exp <- data.frame(exprs > 0)
+exprs <- exprs[rowSums(is.exp) > 1000, ]
+
+cor_test <-  function(x){cor.test(exprs["ATOH7", ], x, 
+         method = "spearman", 
+         alternative = "two.sided")$estimate}
+
+
+res <- apply(exprs, 1,
+             cor_test)
+saveRDS(res, "rObjects/ATOH7_correlations_2022.rds")
+
+
+genes <- res[order((abs(res)), decreasing = TRUE)][1:5] %>% names()
+
+ATOH7_cds <- cds_subset_cc[rowData(cds_subset_cc)$gene_short_name %in% genes,]
+
+
+plot_genes_in_pseudotime(ATOH7_cds,
+                         color_cells_by="annotation",
+                         min_expr=0.5) + ggsave("quick_images/ATOH7_correlation1.png")
+
+genes <- res[order((abs(res)), decreasing = TRUE)][c(1, 6:9)] %>% names()
+ATOH7_cds <- cds_subset_cc[rowData(cds_subset_cc)$gene_short_name %in% genes,]
+
+
+plot_genes_in_pseudotime(ATOH7_cds,
+                         color_cells_by="annotation",
+                         min_expr=0.5) + ggsave("quick_images/ATOH7_correlation2.png")
+write.csv(res[order((abs(res)), decreasing = TRUE)], "csvFiles/ATOH7_Spearman_Correlation.csv")
+
+```
+
+```{r}
+top20cor <- res[order(res, decreasing = TRUE)][1:20] %>% names()
+
+GeneUMAP <- function(gene, seuratObj){
+  p1 <- FeaturePlot(seuratObj, features = gene, 
+                    min.cutoff = "q1", 
+                    cols = c("#E5E5E5", "#FF0000"), 
+                    label = TRUE, order = TRUE, label.size = 2
+                    ) +
+    theme(panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        text = element_text(size=10)) 
+    
+ 
+p1 <- p1 + ggsave(paste0("highRes/umap_ATOH7/",  gene, ".tiff"), width = 3, height = 3)
+return(p1)
+}
+
+lapply(top20cor, GeneUMAP, seuratObj)
+
+
+
+
+```
+
+
 
 ### Graph Test Differential Expression Analysis
 
@@ -458,70 +537,7 @@ p1 + p2
 
 
 
-## Plot Genes in Pseudotime
 
-Look for genes that correlate with ATOH7
-
-```{r}
-exprs <- seuratObj_subset@assays$RNA@data
-is.exp <- data.frame(exprs > 0)
-exprs <- exprs[rowSums(is.exp) > 1000, ]
-
-cor_test <-  function(x){cor.test(exprs["ATOH7", ], x, 
-         method = "spearman", 
-         alternative = "two.sided")$estimate}
-
-
-res <- apply(exprs, 1, cor_test)
-saveRDS(res, "rObjects/ATOH7_correlations.rds")
-
-
-genes <- res[order((abs(res)), decreasing = TRUE)][1:5] %>% names()
-
-ATOH7_cds <- cds_subset_cc[rowData(cds_subset_cc)$gene_short_name %in% genes,]
-
-
-plot_genes_in_pseudotime(ATOH7_cds,
-                         color_cells_by="annotation",
-                         min_expr=0.5) + ggsave("quick_images/ATOH7_correlation1.png")
-
-genes <- res[order((abs(res)), decreasing = TRUE)][c(1, 6:9)] %>% names()
-ATOH7_cds <- cds_subset_cc[rowData(cds_subset_cc)$gene_short_name %in% genes,]
-
-
-plot_genes_in_pseudotime(ATOH7_cds,
-                         color_cells_by="annotation",
-                         min_expr=0.5) + ggsave("quick_images/ATOH7_correlation2.png")
-write.csv(res[order((abs(res)), decreasing = TRUE)], "csvFiles/ATOH7_Spearman_Correlation.csv")
-
-```
-
-```{r}
-top20cor <- res[order(res, decreasing = TRUE)][1:20] %>% names()
-
-GeneUMAP <- function(gene, seuratObj){
-  p1 <- FeaturePlot(seuratObj, features = gene, 
-                    min.cutoff = "q1", 
-                    cols = c("#E5E5E5", "#FF0000"), 
-                    label = TRUE, order = TRUE, label.size = 2
-                    ) +
-    theme(panel.grid = element_blank(),
-        axis.title = element_blank(),
-        axis.text = element_blank(),
-        axis.ticks = element_blank(),
-        text = element_text(size=10)) 
-    
- 
-p1 <- p1 + ggsave(paste0("highRes/umap_ATOH7/",  gene, ".tiff"), width = 3, height = 3)
-return(p1)
-}
-
-lapply(top20cor, GeneUMAP, seuratObj)
-
-
-
-
-```
 
 
 

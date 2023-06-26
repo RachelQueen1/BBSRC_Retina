@@ -18,6 +18,9 @@ library(patchwork)
 library(SeuratWrappers)
 library(harmony)
 library(ggplotify)
+library(MetBrewer)
+
+
 sobjToCds <- function(sObj){
   harmonyLoadings <- sObj@reductions[["harmony"]]@feature.loadings.projected
   sObj <- DietSeurat(sObj, graphs = "umap")

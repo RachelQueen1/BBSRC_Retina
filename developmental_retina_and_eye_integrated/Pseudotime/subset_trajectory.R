@@ -49,8 +49,14 @@ forIDs <- c("T1_T3_PR_BP",
             "RPC_T1_RGC", 
             "EarlyRPC_lateRPC_MG")
 
+
+
+
+
 subsets <- subsets[forIDs]
+
 for (i in 1:9){
+  
   clustersUse <- subsets[[i]]
   outName <- names(subsets)[i]
   

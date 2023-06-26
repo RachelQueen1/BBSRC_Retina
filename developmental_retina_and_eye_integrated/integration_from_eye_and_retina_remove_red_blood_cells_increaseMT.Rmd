@@ -59,7 +59,7 @@ downsample <- function(sObj, no_cells = 4000){
 }
 
 ## read in QCed data
-seuratObj_retina <- readRDS("../fetal/rObjects/sObj_Filtered.rds")
+seuratObj_retina <- readRDS("../developmental_retina//rObjects/sObj_Filtered.rds")
 seuratObj_eye <- readRDS("../Eye/rObjects/sObj_eye.rds")
 seuratObj_list <- c(seuratObj_retina, seuratObj_eye)
 
