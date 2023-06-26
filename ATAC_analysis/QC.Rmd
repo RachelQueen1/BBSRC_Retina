@@ -1,0 +1,273 @@
+---
+title: "QC - ATACseq"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+
+```
+
+
+```{r, libraries}
+
+library(Signac)
+library(Seurat)
+library(GenomeInfoDb)
+library(EnsDb.Hsapiens.v86)
+library(ggplot2)
+library(dplyr)
+library(patchwork)
+library(rtracklayer)
+library(cowplot)
+
+
+set.seed(1234)
+
+
+
+
+```
+
+
+```{r}
+#after processing
+sObj_List <- readRDS("rObjects/sObj_List.rds")
+sObj_Filtered <- sObj_cluster <- readRDS("rObjects/sObj_cluster.rds")
+sampleInfo <- readRDS("rObjects/SampleInfo.rds")
+
+```
+
+
+
+```{r, eval = FALSE}
+dataDir <- "Results"
+samples <- list.files(dataDir) 
+
+howManyCells <- function(sObj){dim(sObj)[2]}
+
+annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Hsapiens.v86)
+seqlevelsStyle(annotations) <- 'UCSC' 
+
+```
+
+
+```{r, eval = FALSE}
+sampleInfo <- data.frame(fName=samples)
+sampleInfo$Tissue <- c("Retina", "Eye-fixed", rep("Retina", 6), rep("Eye", 2), rep("Retina", 4))
+sampleInfo$Stage <- c("20PCW", "10PCW", "15PCW", "12PCW", "16PCW", "12PCW", "17PCW", "18PCW", "8PCW Late", "8PCW Late", "20PCW", "21PCW", "16PCW", "16PCW")
+
+sampleInfo <- sampleInfo %>% filter(fName!='14611')
+
+sObj_List <- list()
+
+for (i in 1:nrow(sampleInfo)){
+  c_data <- Read10X_h5(filename = (file.path(dataDir, sampleInfo$fName[i], "outs/filtered_peak_bc_matrix.h5")))
+  m_data <- read.csv(file.path(dataDir, sampleInfo$fName[i], "outs/singlecell.csv"),  header = TRUE,  row.names = 1) 
+  chrom_assay <- CreateChromatinAssay(counts = c_data, 
+                                      sep = c(":", "-"),
+                                      genome = "hg38", 
+                                      fragments = (file.path(dataDir, 
+                                                             sampleInfo$fName[i], 
+                                                             "outs/fragments.tsv.gz")) ,
+                                      min.cells = 10, min.features = 200)
+  sObj_List[[i]] <- CreateSeuratObject(counts = chrom_assay, assay = "peaks", meta.data = m_data)
+  Annotation(sObj_List[[i]]) <- annotations
+
+}
+
+
+sampleInfo$BeforeFiltering <- sapply(sObj_List, howManyCells)
+
+sampleInfo$
+
+
+
+saveRDS(sObj_List, "rObjects/sObj_List.rds")
+
+```
+
+## Compute QC Metrics
+
+```{r, eval = FALSE}
+for (i in 1:nrow(sampleInfo)){
+  sObj_List[[i]] <- NucleosomeSignal(object = sObj_List[[i]])
+  
+  sObj_List[[i]] <- TSSEnrichment(object = sObj_List[[i]], fast = FALSE)
+  
+  sObj_List[[i]]$pct_reads_in_peaks <- sObj_List[[i]]$peak_region_fragments / sObj_List[[i]]$passed_filters * 100
+  sObj_List[[i]]$blacklist_ratio <- sObj_List[[i]]$blacklist_region_fragments / sObj_List[[i]]$peak_region_fragments
+
+}
+
+for (i in 1:nrow(sampleInfo)){
+sObj_List[[i]]$sample_id <- sampleInfo$fName[i]
+sObj_List[[i]]$tissue <- sampleInfo$Tissue[i]
+sObj_List[[i]]$stage <- sampleInfo$Stage[i]
+}
+
+saveRDS(sObj_List, "rObjects/sObj_List.rds")
+saveRDS(sampleInfo, "rObjects/SampleInfo.rds")
+
+```
+
+
+```{r}
+
+TSS_Enrich_List <- list()
+NS_List <- list()
+Violin_List <- list()
+
+for (i in 1:nrow(sampleInfo)){
+sObj_List[[i]]$high.tss <- ifelse(sObj_List[[i]]$TSS.enrichment > 2, 'High', 'Low')
+TSS_Enrich_List[[i]] <- TSSPlot(sObj_List[[i]], group.by = 'high.tss') + ggtitle(sampleInfo$fName[i])
+
+sObj_List[[i]]$nucleosome_group <- ifelse(sObj_List[[i]]$nucleosome_signal > 4, 'NS > 4', 'NS < 4')
+NS_List[[i]] <- FragmentHistogram(object = sObj_List[[i]], group.by = 'nucleosome_group') + ggtitle(sampleInfo$fName[i])
+
+
+Violin_List[[i]] <- VlnPlot(object = sObj_List[[i]],features = c('pct_reads_in_peaks', 'peak_region_fragments','TSS.enrichment', 'blacklist_ratio', 'nucleosome_signal'),
+  pt.size = 0.1,
+  ncol = 5) 
+
+}
+
+```
+
+### Transcriptional start site (TSS) enrichment score.
+```{r, fig.height=15, fig.width = 20}
+plot_grid(plotlist = TSS_Enrich_List, ncol = 3)
+```
+
+
+
+### Nucleosome banding pattern
+```{r, fig.height=15, fig.width = 20}
+plot_grid(plotlist = NS_List, ncol = 3)
+```
+
+### Violin plot of all QC metrics
+
+```{r, fig.height=25, fig.width = 20}
+plot_grid(plotlist = Violin_List[1:7], ncol = 1)
+```
+
+```{r, fig.height=25, fig.width = 20}
+plot_grid(plotlist = Violin_List[8:13], ncol = 1)
+```
+
+
+### Remove cells that are outliers for these QC metrics.
+
+Pct reads in peaks > 20%;
+Peak region fragments  > 3000 & < 20,000;
+TSS enrichment > 2;
+Blacklist ratio < 0.05;
+Nucleome signal < 4
+
+
+
+```{r, eval = FALSE}
+
+sObj_Filtered <- list()
+
+for (i in 1:nrow(sampleInfo)){
+  sObj_Filtered[[i]] <- subset(
+  x = sObj_List[[i]],
+  subset = peak_region_fragments > 3000 &
+    peak_region_fragments < 20000 &
+    pct_reads_in_peaks > 0.20 &
+    blacklist_ratio < 0.05 &
+    nucleosome_signal < 4 &
+    TSS.enrichment > 2
+)
+
+}
+
+
+
+sampleInfo$AfterFiltering <- sapply(sObj_Filtered, howManyCells)
+
+
+#
+saveRDS(sampleInfo, "rObjects/SampleInfo.rds")
+```
+
+
+# Sample Info 
+```{r}
+sampleInfo
+```
+
+
+## Normalization and linear dimensional reduction
+
+```{r, eval = FALSE}
+sObj_Filtered_norm <- list()
+
+for (i in 1:nrow(sampleInfo)){
+sObj_Filtered_norm[[i]] <- RunTFIDF(sObj_Filtered[[i]])
+sObj_Filtered_norm[[i]] <- FindTopFeatures(sObj_Filtered_norm[[i]], min.cutoff = 'q0')
+sObj_Filtered_norm[[i]] <- RunSVD(sObj_Filtered_norm[[i]])
+
+}
+
+```
+
+
+```{r}
+norm_List <- list()
+
+for (i in 1:nrow(sampleInfo)){
+norm_List[[i]] <- DepthCor(sObj_cluster[[i]]) + 
+  ggtitle(sampleInfo$fName[[i]])
+
+}
+```
+
+```{r, fig.height=25, fig.width=20}
+
+plot_grid(plotlist = norm_List, ncol = 2)
+
+```
+
+## Non-linear dimension reduction and clustering
+
+
+```{r, eval = FALSE}
+sObj_cluster <- list()
+
+
+for (i in 1:nrow(sampleInfo)){
+sObj_cluster[[i]] <- RunUMAP(object = sObj_cluster[[i]], reduction = 'lsi', dims = 2:30)
+sObj_cluster[[i]] <- FindNeighbors(object = sObj_cluster[[i]], reduction = 'lsi', dims = 2:30)
+sObj_cluster[[i]] <- FindClusters(object = sObj_cluster[[i]], verbose = FALSE, algorithm = 3)
+
+}
+saveRDS(sObj_cluster, "rObjects/sObj_cluster.rds")
+```
+
+
+```{r}
+Dim_List <- list()
+for (i in 1:nrow(sampleInfo)){
+  Dim_List[[i]] <- DimPlot(object = sObj_cluster[[i]], label = TRUE)  +
+    
+    ggtitle(paste(sampleInfo$fName[i], 
+                  sampleInfo$Tissue[i],
+                  sampleInfo$Stage[i]))
+
+}
+
+```
+
+```{r, fig.height=20, fig.width=20}
+plot_grid(plotlist = Dim_List[1:7], ncol = 2)
+```
+
+```{r, fig.height=20, fig.width=20}
+plot_grid(plotlist = Dim_List[8:13], ncol = 2)
+```
