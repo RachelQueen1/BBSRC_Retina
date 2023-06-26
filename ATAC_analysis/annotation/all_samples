@@ -1,0 +1,23 @@
+cluster,cell_type
+0,early RPCs
+1,MG
+2,late RPCs
+3,rods
+4,BPs
+5,HCs
+6,T1
+7,T2
+8,T3
+9,early RPCs
+10,rods
+11,GABAaergic amacrine cells 
+12,cones
+13,cones
+14,glycinergic amacrine cells 
+15,glycinergic amacrine cells 
+16,GABAaergic amacrine cells 
+17,early RPCs
+18,Gabaergic amacrine cells
+19,RGCs
+20,starburst amacrine cells
+21,microglia
