@@ -1,0 +1,221 @@
+---
+title: "Monocle ATAC all"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+
+```
+
+
+```{r, libraries}
+library(tidyverse)
+library(Signac)
+library(Seurat)
+library(JASPAR2020)
+library(GenomeInfoDb)
+library(EnsDb.Hsapiens.v86)
+library(TFBSTools)
+library(monocle3)
+library(SeuratWrappers)
+library(patchwork)
+
+pfm <- getMatrixSet(
+  x = JASPAR2020,
+  opts = list(collection = "CORE", tax_group = 'vertebrates', all_versions = FALSE)
+)
+
+motifs <- sapply(pfm, function(x){x@name})
+motif_df <- data.frame(motif = names(motifs),
+           name = unname(motifs)
+           )
+
+
+retina_markers <- readRDS("../markers/Retina_Markers.rds")
+#retina_markers_df <-
+
+
+motif_df$motif[match(retina_markers[[2]], motif_df$name)]
+sObj <- readRDS("rObjects/shared_sObj_merge_with13PCW.rds")
+
+```
+
+
+## Annotate cells
+
+The cells were annotated using the annotations on slide 155 with new AC definitions:
+
+```{r}
+anno <- read.csv("annotation/all_samples")
+
+sObj$CellType <- anno$cell_type[match(sObj$peaks_snn_res.0.8, anno$cluster)]
+DimPlot(sObj, group.by = "CellType", label = TRUE)
+```
+
+
+## All cells trajectory 
+
+
+```{r}
+start_Node = "Y_106"
+```
+
+Monocle 3 was used to calculate the pseudotime trajectory for all cells starting from `r start_Node`:
+
+```{r}
+cds_all <- as.cell_data_set(sObj)
+cds_all <- cluster_cells(cds = cds_all, reduction_method = "UMAP")
+cds_all <- learn_graph(cds_all, use_partition = FALSE, close_loop = FALSE)
+cds_all <- order_cells(cds_all, reduction_method = "UMAP", root_pr_nodes = start_Node)
+```
+
+```{r}
+plot_cells(
+  cds = cds_all,
+  show_trajectory_graph = TRUE,
+  color_cells_by = "pseudotime", label_principal_points = TRUE
+)
+```
+
+```{r}
+sObj <- AddMetaData(
+  object = sObj,
+  metadata = cds_all@principal_graph_aux@listData$UMAP$pseudotime,
+  col.name = "all_pseudotime"
+)
+```
+
+The pseudotime estimated are shown on the original umap below:
+
+```{r, fig.width=20}
+p1 <- FeaturePlot(sObj, c("all_pseudotime"), pt.size = 0.1) & scale_color_viridis_c()  
+p2 <- DimPlot(sObj, group.by = "CellType", label = TRUE)
+
+
+p2 + p1 
+```
+
+## RPC T1 T2 T2 trajectory
+
+The RPC, T1, T2, T3 cell types were selected and pseudotime analysis performed. 
+
+```{r, eval = FALSE}
+
+RPC_T1_T2_T3 <- sObj[,  sObj$CellType %in% c("early RPCs", "late RPCs", "T1", "T2", "T3")]
+
+
+RPC_T1_T2_T3[,RPC_T1_T2_T3$nCount_peaks > 25000]
+
+
+RPC_T1_T2_T3_new <- RunUMAP(object = RPC_T1_T2_T3,
+                      reduction = 'lsi',
+                      dims = 2:10,
+                      n.neighbors = 30,
+                      min.dist = 0.25,
+                      n.epochs = 5000
+                      )
+
+
+
+saveRDS(RPC_T1_T2_T3_new, "rObjects/seurat_PT_RPC_T1_T2_T3.rds")
+
+
+
+```
+
+```{r}
+start_Node = "Y_31"
+RPC_T1_T2_T3_new <- readRDS("rObjects/seurat_PT_RPC_T1_T2_T3.rds")
+
+cds <- as.cell_data_set(RPC_T1_T2_T3_new)
+cds <- cluster_cells(cds = cds, reduction_method = "UMAP")
+cds <- learn_graph(cds, use_partition = FALSE, close_loop = FALSE)
+cds <- order_cells(cds, reduction_method = "UMAP", root_pr_nodes = start_Node)
+```
+
+```{r}
+
+plot_cells(
+  cds = cds,
+  show_trajectory_graph = TRUE,
+  color_cells_by = "CellType", label_principal_points = TRUE
+)
+
+```
+
+Monocle 3 was used to calculate the pseudotime trajectory for all cells starting from `r start_Node`:
+
+```{r}
+cds <- order_cells(cds, reduction_method = "UMAP", root_pr_nodes = start_Node)
+
+
+
+```
+
+
+
+```{r}
+plot_cells(
+  cds = cds,
+  show_trajectory_graph = TRUE,
+  color_cells_by = "pseudotime", label_principal_points = TRUE
+)
+
+```
+The pseudotime estimated are shown on the original umap below:
+
+```{r}
+sObj <- AddMetaData(
+  object = sObj,
+  metadata = cds@principal_graph_aux@listData$UMAP$pseudotime,
+  col.name = "RPC_T1_T2_T3"
+)
+
+DefaultAssay(sObj) <-"chromvar"
+
+
+```
+
+
+
+
+```{r}
+
+pseudotime <-sObj$RPC_T1_T2_T3[!is.na(sObj$RPC_T1_T2_T3)]
+cor_row <- function(x){cor(pseudotime, x) }
+
+
+addCorrelation <- function(cellType){
+motif_mat <- sObj@assays$chromvar@data[motifs[[cellType]]$motif,!is.na(sObj$RPC_T1_T2_T3)]
+motifs[[cellType]]$corr_pseudotime <- apply(motif_mat, 1, cor_row)}
+
+
+motifs <- lapply(names(motifs), addCorrelation)
+
+
+
+
+
+```
+
+
+```{r, fig.width=20}
+p1 <- FeaturePlot(sObj, c("RPC_T1_T2_T3"), pt.size = 0.1) & scale_color_viridis_c()  
+p2 <- DimPlot(sObj, group.by = "CellType", label = TRUE)
+
+
+p2 + p1 
+```
+
+
+```{r}
+FeaturePlot(sObj, c("RPC_T1_T2_T3"), pt.size = 0.1) & scale_color_viridis_c()
+
+FeaturePlot(sObj, c("nCount_peaks"), pt.size = 0.1) & scale_color_viridis_c()
+DimPlot(sObj,group.by = "ID", pt.size = 0.1) 
+```
+

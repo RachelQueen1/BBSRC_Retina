@@ -1,0 +1,308 @@
+---
+title: "Monocle ATAC all"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+
+```
+
+
+```{r, libraries}
+library(tidyverse)
+library(Signac)
+library(Seurat)
+library(JASPAR2020)
+library(GenomeInfoDb)
+library(EnsDb.Hsapiens.v86)
+library(TFBSTools)
+library(monocle3)
+library(SeuratWrappers)
+library(patchwork)
+
+pfm <- getMatrixSet(
+  x = JASPAR2020,
+  opts = list(collection = "CORE", tax_group = 'vertebrates', all_versions = FALSE)
+)
+
+# motifs <- sapply(pfm, function(x){x@name})
+# motif_df <- data.frame(motif = names(motifs),
+#            name = unname(motifs)
+#            )
+# 
+# 
+# retina_markers <- readRDS("../markers/Retina_Markers.rds")
+# #retina_markers_df <-
+# 
+# 
+# motif_df$motif[match(retina_markers[[2]], motif_df$name)]
+motifs <- readRDS("rObjects/shared_enriched_motifs_with13PCW_cellTypes.rds")
+sObj <- readRDS("rObjects/shared_sObj_merge_with13PCW_footprints.rds")
+# DimPlot(integrated, label = TRUE)
+
+
+motif_expr <- sObj@assays$chromvar@data
+motif_expr <- motif_expr[rowSums(motif_expr) > 0 ,]
+sObj$nMotif <- motif_expr %>% colSums()
+```
+
+
+## Annotate cells
+
+The cells were annotated using the annotations on slide 155 with new AC definitions:
+
+```{r}
+anno <- read.csv("annotation/all_samples")
+
+sObj$CellType <- anno$cell_type[match(sObj$peaks_snn_res.0.8, anno$cluster)]
+DimPlot(sObj, group.by = "CellType", label = TRUE)
+
+FeaturePlot(sObj, "nMotif", label = TRUE, max.cutoff = 2000, min.cutoff = 0)
+FeaturePlot(sObj, "MA0148.4", min.cutoff = 0)
+
+```
+
+
+
+## RPC T1 T2 T2 trajectory
+```{r}
+start_Node = "Y_31"
+```
+
+The RPC, T1, T2, T3 cell types were selected and Monocle 3 pseudotime analysis performe starting from `r start_Node`.  
+
+```{r, eval = FALSE}
+
+RPC_T1_T2_T3 <- sObj[,  sObj$CellType %in% c("early RPCs", "late RPCs", "T1", "T2", "T3")]
+
+
+RPC_T1_T2_T3[,RPC_T1_T2_T3$nCount_peaks > 25000]
+
+
+RPC_T1_T2_T3_new <- RunUMAP(object = RPC_T1_T2_T3,
+                      reduction = 'lsi',
+                      dims = 2:10,
+                      n.neighbors = 30,
+                      min.dist = 0.25,
+                      n.epochs = 5000
+                      )
+
+
+
+saveRDS(RPC_T1_T2_T3_new, "rObjects/seurat_PT_RPC_T1_T2_T3.rds")
+
+
+
+```
+
+```{r}
+
+RPC_T1_T2_T3_new <- readRDS("rObjects/seurat_PT_RPC_T1_T2_T3.rds")
+
+cds <- as.cell_data_set(RPC_T1_T2_T3_new)
+cds <- cluster_cells(cds = cds, reduction_method = "UMAP")
+cds <- learn_graph(cds, use_partition = FALSE, close_loop = FALSE)
+cds <- order_cells(cds, reduction_method = "UMAP", root_pr_nodes = start_Node)
+
+### add pseudotime back to seurat object
+sObj <- AddMetaData(
+  object = sObj,
+  metadata = cds@principal_graph_aux@listData$UMAP$pseudotime,
+  col.name = "RPC_T1_T2_T3"
+)
+
+
+
+```
+
+```{r}
+p1 <- plot_cells(
+  cds = cds,
+  show_trajectory_graph = TRUE,
+  color_cells_by = "CellType", label_principal_points = TRUE, cell_stroke = .5
+) 
+
+
+
+
+
+p0 <- p1
+p0$layers[[1]] <- NULL
+p0
+```
+
+
+
+```{r}
+p0 <-  plot_cells(
+  cds = cds,
+  show_trajectory_graph = TRUE,
+  color_cells_by = "pseudotime", label_principal_points = TRUE,  cell_stroke = .5
+) 
+
+p0$layers[[1]] <- NULL
+p0
+
+```
+
+The pseudotime estimated are shown on the original umap below:
+
+
+```{r}
+DimPlot(sObj, group.by = "CellType", label = TRUE)
+
+FeaturePlot(sObj, c("RPC_T1_T2_T3"), pt.size = 0.1) & scale_color_viridis_c()
+
+```
+
+
+
+The correlation between pseudotime between motifs enrichment was calculated:
+
+```{r}
+cellTypes <- names(motifs)
+pseudotime <-sObj$RPC_T1_T2_T3[!is.na(sObj$RPC_T1_T2_T3)]
+cor_row <- function(x){cor(pseudotime, x) }
+
+
+addCorrelation <- function(cellType){
+motif_mat <- sObj@assays$chromvar@data[motifs[[cellType]]$motif,!is.na(sObj$RPC_T1_T2_T3)]
+motifs[[cellType]]$corr_RPC_T1_T2_T3 <- apply(motif_mat, 1, cor_row)
+return(motifs[[cellType]])
+}
+
+
+motifs <- lapply(names(motifs), addCorrelation)
+names(motifs) <- cellTypes
+
+```
+
+
+## Top Motif plots {.tabset .tabset-pills}
+
+The motif lists were filtered to include only motifs in at least 30% of the cells that there were enriched for with a log fold change of over 2. The top 5 absolute correlation scores for each cell type then selected
+
+
+```{r}
+motifs_filtered <- lapply(motifs, function(x) {x[x$fold.enrichment > 2 & x$percent.observed > 30, ]})
+
+motif_RPC <- motifs_filtered[["early RPCs"]]
+
+findTopMotifs <- function(x){x %>% arrange(desc(abs(corr_RPC_T1_T2_T3))) %>% head(n = 5)}
+
+topMotifs <- lapply(motifs_filtered, findTopMotifs)
+
+# 
+# 
+# no_motifs <- motifs_filtered %>% sapply(nrow) %>% data.frame() 
+# colnames(no_motifs) <- "number of motifs"
+# 
+# no_motifs
+
+```
+
+```{r}
+MotifFeaturePlot <- function(motif){
+  motif_name <- motifs[[1]]$motif.name[motifs[[1]]$motif == motif]
+  p1 <- FeaturePlot(sObj, motif, min.cutoff = 0, cols = c("lightgrey", "red"), order = TRUE, pt.size = 1 ) + ggtitle( paste(motif_name, motif))
+  p2 <- MotifPlot(sObj, motif )
+ layout <- '
+A#
+AB
+'
+p3 <- p1 + p2   +
+  plot_layout(design = layout, widths = c(2,1))
+  return(p3)
+}
+
+
+
+DefaultAssay(sObj) <- "peaks"
+```
+
+```{r}
+footprints <- GetAssayData(object = sObj, assay = "peaks", 
+              slot = "positionEnrichment") %>% names()
+
+
+p2 <- PlotFootprint(sObj, features = c(topMotifs[["early RPCs"]]$motif.name))
+```
+
+
+### early RPCs
+
+```{r, fig.width=20, fig.height=10}
+lapply(topMotifs[["early RPCs"]]$motif, MotifFeaturePlot)
+```
+
+```{r}
+T1 <- topMotifs[["T1"]]$motif
+T2 <- topMotifs[["T2"]]$motif
+T3 <- topMotifs[["T3"]]$motif
+
+
+
+T1_T2 <- intersect(T1, T2)
+T1_T3 <- intersect(T1, T3)
+
+T1_T2_T3 <- intersect(T3, T1_T2)
+T1_T2 <- setdiff(T1_T2, T1_T2_T3)
+T1_T3 <- setdiff(T1_T3, T1_T2_T3)
+
+T1_only <- setdiff(T1, c(T2,T3))
+T2_only <- setdiff(T2, c(T1,T3))
+T3_only <- setdiff(T3, c(T2,T1))
+
+T1 <- intersect(T1, T1_T2)
+
+
+# T1_T2_T3 <- c(topMotifs[["T1"]]$motif.name, topMotifs[["T2"]]$motif.name, topMotifs[["T3"]]$motif) %>% unique()
+
+
+
+
+```
+
+### T1 only
+
+No motifs were found that were unique to T1
+
+
+### T1 and T2
+
+
+```{r, fig.width=20, fig.height=10}
+lapply(T1_T2, MotifFeaturePlot)
+```
+
+### T2 only
+
+```{r, fig.width=20, fig.height=10}
+lapply(T2_only, MotifFeaturePlot)
+```
+
+### T1, T2 and T3 
+
+```{r, fig.width=20, fig.height=10}
+lapply(T1_T2_T3, MotifFeaturePlot)
+```
+
+
+### T1 and T3
+
+```{r, fig.width=20}
+lapply(T1_T3, MotifFeaturePlot)
+```
+
+
+### T3 only 
+
+
+```{r, fig.width=20, fig.height=10}
+lapply(T3, MotifFeaturePlot)
+```
+
