@@ -1,0 +1,393 @@
+---
+title: "hiRes"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+
+```{r}
+library(Spaniel)
+library(scran)
+library(scater)
+library(batchelor)
+library(dplyr)
+library(Seurat)
+library(SCFunctionsV3)
+library(cowplot)
+library(RColorBrewer)
+
+allData <- "/data/rachel/Linda_Lako/Spatial/spaceranger_outs_2021_102"
+tissue <- "fetal_retina"
+projDir <- paste0("/data/rachel/Linda_Lako/Spatial/", tissue)
+outputDir <- file.path(projDir, "/rObjects/")
+
+
+```
+## Plotting Functions
+```{r}
+clusterPlot <- function(sce, x_range = NULL, y_range = NULL, cl = "cluster"){
+  plotTitle <- samp <- sce$id %>% unique()
+  p1 <- spanielPlot(object = sce,
+        plotType = "Cluster",
+        clusterRes = cl,
+        showFilter = NULL,
+        techType = "Visium",
+        ptSizeMax = 1,
+        customTitle = plotTitle) #+ scale_color_manual(values = plotCols)
+  
+  ##zoom into tissue
+  if (is.null(x_range)){
+  x_range <- sce$pixel_x %>% range()}
+  
+  if (is.null(y_range)){
+  y_range <- sce$pixel_y %>% range()}
+  
+  #imgSizes <- sce@metadata$ImgDims
+  
+  p1 <- p1 +  coord_cartesian(xlim=x_range, ylim = y_range) 
+  
+  return(p1)
+}
+
+
+
+
+individualCluster <- function(clusterNo, sce, x_range = NULL, y_range = NULL, cluster_res = "cluster"){
+  section <- sce$section %>%unique()
+  plotTitle <- paste("Cluster", clusterNo, section)
+  ##zoom into tissue
+  if (is.null(x_range)){
+  x_range <- sce$pixel_x %>% range()}
+  
+  if (is.null(y_range)){
+  y_range <- sce$pixel_y %>% range()}
+  
+  
+  
+  sce_subset <- sce[, sce$cluster == clusterNo ]
+  
+  p1 <- spanielPlot(object = sce_subset,
+        plotType = "Cluster",
+        clusterRes = cluster_res,
+        showFilter = NULL,
+        techType = "Visium",
+        ptSizeMax = 1,
+        customTitle = plotTitle) +scale_color_manual(values = "#08519c")
+  
+  p1 <- p1 +  coord_cartesian(xlim=x_range, ylim = y_range)
+  
+  return(p1)
+}
+
+
+saveIndividualPlot <- function(clusterName, w = 3, height = 3){
+  
+  if (clusterName == "all"){}else{
+  p1 <- plot_list[[clusterName]]
+  fName <- paste0("highResPlot/", stage, "/", clusterName, ".tiff")
+  ggsave(fName, p1, width = w, height = 3)}
+}
+
+
+
+```
+
+
+# 8PCW
+
+
+```{r}
+stage <- "8PCW"
+sectionUse <- "D1"
+
+## Load Data
+sObj <- readRDS(file.path(outputDir, paste0(stage, "_seurat.rds")))
+seurat_list <- SplitObject(sObj, split.by = "section")
+sce_list <- readRDS(file.path(outputDir, paste0(stage, "_sce.rds")))
+sections <- paste0(stage, c("_A1", "_B1", "_C1","_D1"))
+sce <- sce_list[[grep(sectionUse, names(sce_list))]]
+
+x_range <- c(270, 420)
+y_range <- c(250, 420)
+individualCluster(0, sce, x_range, y_range)
+
+
+noClusters <- sObj@active.ident %>% as.character() %>% as.numeric() %>% max()
+plot_list <- lapply(0:noClusters, individualCluster, sce, x_range, y_range)
+
+
+names(plot_list) <- paste0("Cluster_", 0:noClusters)
+lapply(names(plot_list), saveIndividualPlot, w = 3, height = 3)
+
+plotCols <- c("#ff6a00", "#ff0000","#00ff44" ,  "#2600ff", "#fff200", "#00fff7", "#e607e2" )
+clusterPlot(sce, x_range, y_range) +  ggsave(paste0("highResPlot/", stage, "/all_clusters.tiff"),  width = 5, height = 5)
+
+
+### Heatmap
+markers <- readRDS(file.path(outputDir, paste0(stage, ".rds"))) 
+top10 <- markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) 
+p1 <- DoHeatmap(sObj, features = top10$gene)
+mm <- match(p1$data$Feature, gene_anno$gene)
+p1$data$Feature <- gene_anno$Symbol[mm]
+
+p1 +  ggsave(paste0("highResPlot/", stage, "/heatmap.tiff"), 
+             width = 12, 
+             height = 10)
+```
+
+
+
+
+
+
+## Cluster 4 
+```{r}
+cluster4 <- sObj[,sObj$originalexp_snn_res.0.5 == 4]
+
+cluster4 <- cluster4 %>% 
+  RunPCA(pc.genes = VariableFeatures(cluster4), 
+         npcs = 20, verbose = FALSE) %>%
+  harmony::RunHarmony("id", plot_convergence = TRUE, assay.use = "originalexp") %>% 
+  RunUMAP(reduction = "harmony", dims = 1:10, assay = "originalexp") %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = c(0.5))
+
+
+markers <- FindAllMarkers(cluster4, only.pos = TRUE, logfc.threshold = 0.5 )
+markers <- markers %>% arrange(cluster, desc(avg_log2FC))
+ 
+
+gene_anno <- rowData(sce_list[[1]]) %>% data.frame() %>% dplyr::rename(gene = ID)
+
+markers <- markers %>% left_join(gene_anno)
+fName <- paste0("csvFiles/", "8PCW_cluster4", ".csv")
+write.csv(markers, fName)
+
+DimPlot(cluster4 ) +  
+  ggtitle("8PCW - Cluster 4") +
+  theme_classic()  +
+  ggsave("highResPlot/8PCW/cluster4_subcluster.tiff", width = 7, 
+         height = 5)
+
+
+
+colnames(sce)
+sce[,colnames(cluster4)]
+
+sObj_D1 <- sObj[,sObj$section == sectionUse]
+cluster4_D1 <- cluster4[,cluster4$section == sectionUse]
+
+sce$subcluster4 <- NA
+sce[,colnames(cluster4_D1)]$subcluster4 <- cluster4_D1$originalexp_snn_res.0.5
+
+
+sce$subcluster4 <- sce$subcluster4 %>% factor()
+
+
+clusterPlot(sce, x_range = NULL, y_range = NULL, cl = "subcluster4") + ggsave("highResPlot/8PCW/subcluster4_spatial.tiff", width = 5, height = 7)
+
+```
+
+## SubCluster_0_Cluster_4 vs Cluster 10
+```{r}
+sObj$subclusters <- NA
+sObj$subclusters[colnames(cluster4)] <- as.numeric(cluster4$originalexp_snn_res.0.5) - 1
+
+sObj$subclusters[sObj$originalexp_snn_res.0.5 == 10] <- 10
+
+markers <- FindMarkers(sObj, ident.1 = 0, ident.2 = 10, group.by = "subclusters")
+
+markers <- markers %>%  tibble::rownames_to_column("gene") %>%left_join(gene_anno) %>% arrange(desc(avg_log2FC))
+
+View(markers)
+
+
+fName <- paste0("csvFiles/", "SubCluster_0_Cluster_4 vs Cluster 10", ".csv")
+write.csv(markers, fName)
+
+
+```
+
+## Cluster 10
+```{r}
+cluster10 <- sObj[,sObj$originalexp_snn_res.0.5 == 10]
+
+cluster10 <- cluster10 %>% 
+  RunPCA(pc.genes = VariableFeatures(cluster10), 
+         npcs = 20, verbose = FALSE) %>%
+  harmony::RunHarmony("id", plot_convergence = TRUE, assay.use = "originalexp") %>% 
+  RunUMAP(reduction = "harmony", dims = 1:10, assay = "originalexp") %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = c(0.5))
+
+
+markers <- FindAllMarkers(cluster10, only.pos = TRUE, logfc.threshold = 0.5 )
+markers <- markers %>% arrange(cluster, desc(avg_log2FC))
+ 
+
+gene_anno <- rowData(sce_list[[1]]) %>% data.frame() %>% dplyr::rename(gene = ID)
+
+markers <- markers %>% left_join(gene_anno)
+fName <- paste0("csvFiles/", "8PCW_cluster10", ".csv")
+write.csv(markers, fName)
+
+DimPlot(cluster10 ) +  
+  ggtitle("8PCW - Cluster 4") +
+  theme_classic()  +
+  ggsave("highResPlot/8PCW/cluster10_subcluster.tiff", width = 7, 
+         height = 5)
+
+
+
+colnames(sce)
+sce[,colnames(cluster10)]
+
+sObj_D1 <- sObj[,sObj$section == sectionUse]
+cluster10_D1 <- cluster10[,cluster10$section == sectionUse]
+
+sce$subcluster10 <- NA
+sce[,colnames(cluster10_D1)]$subcluster10 <- cluster10_D1$originalexp_snn_res.0.5
+
+
+sce$subcluster10 <- sce$subcluster10 %>% factor()
+
+
+clusterPlot(sce, x_range = NULL, y_range = NULL, cl = "subcluster10") + ggsave("highResPlot/8PCW/subcluster10_spatial.tiff", width = 5, height = 7)
+
+```
+
+
+
+# 12PCW
+
+```{r}
+stage <- "12PCW"
+sectionUse <- "C1"
+
+## Load Data
+sObj <- readRDS(file.path(outputDir, paste0(stage, "_seurat.rds")))
+seurat_list <- SplitObject(sObj, split.by = "section")
+sce_list <- readRDS(file.path(outputDir, paste0(stage, "_sce.rds")))
+sections <- paste0(stage, c("_A1", "_B1", "_C1","_D1"))
+sce <- sce_list[[grep(sectionUse, names(sce_list))]]
+
+x_range <- c(270, 420)
+y_range <- c(250, 420)
+#individualCluster(0, sce, x_range, y_range)
+
+
+noClusters <- sObj@active.ident %>% as.character() %>% as.numeric() %>% max()
+plot_list <- lapply(0:noClusters, individualCluster, sce, x_range, y_range)
+
+
+names(plot_list) <- paste0("Cluster_", 0:noClusters)
+lapply(names(plot_list), saveIndividualPlot, w = 3, height = 3)
+
+
+clusterPlot(sce, x_range, y_range) +  ggsave(paste0("highResPlot/", stage, "/all_clusters.tiff"),  width = 5, height = 5)
+
+
+### Heatmap
+markers <- readRDS(file.path(outputDir, paste0(stage, ".rds"))) 
+top10 <- markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) 
+p1 <- DoHeatmap(sObj, features = top10$gene)
+mm <- match(p1$data$Feature, gene_anno$gene)
+p1$data$Feature <- gene_anno$Symbol[mm]
+
+p1 +  ggsave(paste0("highResPlot/", stage, "/heatmap.tiff"), 
+             width = 12, 
+             height = 10)
+```
+
+
+# 13PCW
+
+```{r}
+stage <- "13PCW"
+sectionUse <- "D1"
+
+## Load Data
+sObj <- readRDS(file.path(outputDir, paste0(stage, "_seurat.rds")))
+seurat_list <- SplitObject(sObj, split.by = "section")
+sce_list <- readRDS(file.path(outputDir, paste0(stage, "_sce.rds")))
+sections <- paste0(stage, c("_A1", "_B1", "_C1","_D1"))
+sce <- sce_list[[grep(sectionUse, names(sce_list))]]
+
+x_range <- c(270, 420)
+y_range <- c(250, 420)
+#individualCluster(0, sce, x_range, y_range)
+
+
+noClusters <- sObj@active.ident %>% as.character() %>% as.numeric() %>% max()
+plot_list <- lapply(0:noClusters, individualCluster, sce, x_range, y_range)
+
+
+names(plot_list) <- paste0("Cluster_", 0:noClusters)
+lapply(names(plot_list), saveIndividualPlot, w = 3, height = 3)
+
+
+clusterPlot(sce, x_range, y_range) +  ggsave(paste0("highResPlot/", stage, "/all_clusters.tiff"),  width = 5, height = 5)
+
+
+### Heatmap
+markers <- readRDS(file.path(outputDir, paste0(stage, ".rds"))) 
+top10 <- markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) 
+p1 <- DoHeatmap(sObj, features = top10$gene)
+mm <- match(p1$data$Feature, gene_anno$gene)
+p1$data$Feature <- gene_anno$Symbol[mm]
+
+p1 +  ggsave(paste0("highResPlot/", stage, "/heatmap.tiff"), 
+             width = 12, 
+             height = 10)
+```
+
+# 11PCW
+
+```{r}
+stage <- "11PCW"
+sectionUse <- "B1"
+
+outputDir <- "/data/rachel/Linda_Lako/Spatial/11PCW/rObjects"
+## Load Data
+#sObj <- readRDS(file.path(outputDir, paste0(stage, "_seurat.rds")))
+
+sObj <- readRDS(file.path(outputDir, "integrated.rds"))
+sObj$section <- sObj$Section
+seurat_list <- SplitObject(sObj, split.by = "section")
+
+sce_list <- readRDS(file.path(outputDir, paste0("sce_list.rds")))
+sections <- paste0(stage, c("_A1", "_B1", "_C1","_D1"))
+
+names(sce_list)
+sce <- sce_list[[grep(sectionUse, names(sce_list))]]
+
+x_range <- c(270, 420)
+y_range <- c(250, 420)
+#individualCluster(0, sce, x_range, y_range)
+
+
+noClusters <- sObj@active.ident %>% as.character() %>% as.numeric() %>% max()
+plot_list <- lapply(0:noClusters, individualCluster, sce, x_range, y_range)
+
+
+names(plot_list) <- paste0("Cluster_", 0:noClusters)
+lapply(names(plot_list), saveIndividualPlot, w = 3, height = 3)
+
+
+clusterPlot(sce, x_range, y_range) +  ggsave(paste0("highResPlot/", stage, "/all_clusters.tiff"),  width = 5, height = 5)
+
+
+### Heatmap
+markers <- readRDS(file.path(outputDir, paste0(stage, ".rds"))) 
+top10 <- markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) 
+p1 <- DoHeatmap(sObj, features = top10$gene)
+mm <- match(p1$data$Feature, gene_anno$gene)
+p1$data$Feature <- gene_anno$Symbol[mm]
+
+p1 +  ggsave(paste0("highResPlot/", stage, "/heatmap.tiff"), 
+             width = 12, 
+             height = 10)
+```
