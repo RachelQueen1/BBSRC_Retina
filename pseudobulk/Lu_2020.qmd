@@ -1,0 +1,437 @@
+---
+format: 
+  html:
+    self-contained: true
+---
+
+# Lu et al, 2020 
+
+### Single-Cell Analysis of Human Retina Identifies Evolutionarily Conserved and Species-Specific Mechanisms Controlling Development {-}
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, fig.width = 10, fig.height = 10)
+
+```
+
+```{r}
+library(Seurat)
+library(tidyverse)
+library(harmony)
+library(DoubletFinder)
+library(doParallel)
+library(patchwork)
+library(ggpubr)
+
+howManyCells <- function(sObj){dim(sObj)[2]}
+
+registerDoParallel(8)
+
+### Functions
+preDoublets <- function(seuratObj){  
+    seuratObj <- NormalizeData(seuratObj)
+    
+    seuratObj <- ScaleData(seuratObj)
+    seuratObj <- FindVariableFeatures(seuratObj, 
+                                      x.low.cutoff = 0.0125, 
+                                      y.cutoff = 0.25, 
+                                      do.plot=FALSE)
+    seuratObj <- RunPCA(seuratObj, pc.genes = seuratObj@var.genes, pcs.print = 0)
+    
+    # set.seed(1234)
+    # seuratObj <- RunTSNE(seuratObj, dims.use = 1:10, verbose=TRUE)
+    return(seuratObj)
+}
+
+findDoublets <- function(seuratObj){
+    
+    ### calculate expected number of doublets
+    nExp_poi  <- round(0.15*nrow(seuratObj@meta.data))
+    
+    ### predict doublets
+    seuratObj <- doubletFinder_v3(seuratObj, 
+                                  PCs = 1:10, 
+                                  pN = 0.25, 
+                                  pK = 0.01, 
+                                  nExp = nExp_poi, 
+                                  reuse.pANN = FALSE, 
+                                  sct=FALSE)
+    
+    
+    seuratObj@meta.data <- seuratObj@meta.data %>% 
+        rename_at(vars(starts_with("DF.classifications")), 
+                  funs(str_replace(., ".*", "DF.classifications"))) %>%
+        rename_at(vars(starts_with("pANN")), 
+                  funs(str_replace(., ".*", "pANN")))
+    
+    return(seuratObj) 
+    
+}
+
+dir <- "results/lu_2020/"
+
+
+```
+
+
+
+```{r}
+samples <- list.dirs(dir, full.names = F, recursive = F)
+
+
+load_counts <- function(sample, dirname = dir){
+    fname <- file.path(dirname, sample, "/outs/barcodes.tsv.gz")
+    
+    if (file.exists(fname)){
+    
+        df <- Read10X(file.path(dirname, sample, "/outs/"))
+
+        sObj <- CreateSeuratObject(counts = df, project = sample, min.cells = 10, min.features = 0)
+        sObj[["percent.mt"]] <- PercentageFeatureSet(sObj, pattern = "^MT-")
+        sObj[["name"]] <- sample
+
+        return(sObj)
+    }
+    
+}
+
+sObj_list <- foreach(i=1:length(samples)) %do% load_counts(samples[i])
+
+names(sObj_list) <- samples
+
+sObj_list <- sObj_list %>% discard(is_null)
+
+QCHistoPlot <- function(sObj, feat, bw = 200){
+
+
+    ggplot2::ggplot(sObj@meta.data, ggplot2::aes_string(feat)) +
+        ggplot2::geom_histogram(binwidth = bw) + ggtitle(paste0(feat, ", ", sObj$name[1]))
+}
+
+
+#lapply(sObj_list, QCHistoPlot, "nFeature_RNA")
+#lapply(sObj_list, QCHistoPlot, "nCount_RNA", 500)
+
+#FeatureScatter(sObj_list[[1]], "nCount_RNA", "percent.mt")
+```
+
+```{r, eval = F}
+system("mkdir -p rObjects/lu_2020 csvFiles/lu_2020")
+
+cell_counts <- sapply(sObj_list, howManyCells)
+
+sampleInfo <- tibble(samples_names = names(sObj_list), cell_counts =  cell_counts)
+
+
+sampleInfo
+```
+
+```{r}
+cell_counts <- gsub("[ACGT]*-", "", rownames(sObj_list[[1]]@meta.data)) %>% table()
+sample_names <- c("GW12", "GW14", "GW16", "GW18", "GW20_periphery", "GW20_macula", "GW22", "GW24_rep1", "GW24_rep2", "GW27")
+
+sample_anno <- tibble(1:10, sample_names)
+sample_anno$`1:10` <- as.character(sample_anno$`1:10`)
+
+sObj_list[[1]]$sample_name <- gsub("[ACGT]*-", "", rownames(sObj_list[[1]]@meta.data))
+
+#sObj_list[[1]]$sample_name
+
+for (i in seq(sample_anno$`1:10`)){
+    sObj_list[[1]]$sample_name[sObj_list[[1]]$sample_name == i] <- sample_anno$sample_names[i]
+}
+
+table(sObj_list[[1]]$sample_name) |> knitr::kable(format = "markdown")
+```
+
+
+```{r}
+minCounts <- 2000
+minFeatures <- 1000
+maxMit <- 10
+```
+
+```{r, eval = F}
+sObj_filtered <- list()
+for (i in 1:length(sObj_list)){
+  filter <- sObj_list[[i]]$nCount_RNA > minCounts & 
+    sObj_list[[i]]$nFeature_RNA > minFeatures & 
+    sObj_list[[i]]$percent.mt < maxMit
+  
+  sObj_filtered[[i]] <- sObj_list[[i]][ , filter]
+  
+
+}
+
+
+
+### Find and remove doublets
+for (i in 1:length(sObj_filtered)){
+    sObj_filtered[[i]] <-  preDoublets(sObj_filtered[[i]])
+    sObj_filtered[[i]] <- findDoublets(sObj_filtered[[i]])
+    
+    cellFilter <- sObj_filtered[[i]]$DF.classifications == "Singlet"
+    sObj_filtered[[i]] <- sObj_filtered[[i]][, cellFilter]
+    
+    sObj_filtered[[i]] <- NormalizeData(sObj_filtered[[i]], verbose = FALSE)
+    sObj_filtered[[i]] <- FindVariableFeatures(sObj_filtered[[i]], 
+                                                 selection.method = "vst",
+                                                 nfeatures = 2000, 
+                                                 verbose = FALSE)
+}
+rm(sObj_list)
+
+
+
+
+sampleInfo$afterFiltering <- sapply(sObj_filtered, howManyCells)
+
+saveRDS(sampleInfo, "rObjects/lu_2020/sampleInfo.rds")
+
+
+saveRDS(sObj_filtered, "rObjects/lu_2020/sObj_filtered.rds")
+
+```
+
+```{r, eval = F}
+sObj_filtered <- readRDS("rObjects/lu_2020/sObj_filtered.rds")
+sampleInfo <- readRDS("rObjects/lu_2020/sampleInfo.rds")
+sampleInfo |> knitr::kable(format = "markdown")
+```
+
+```{r, eval = F}
+lapply(sObj_filtered, QCHistoPlot, "nFeature_RNA")
+lapply(sObj_filtered, QCHistoPlot, "nCount_RNA", 500)
+```
+
+```{r, eval = F, echo=FALSE, results = "hide"}
+
+## add sample name to seurat object and name list
+for (i in seq(sObj_filtered)){
+    #cat(i)
+    sObj_filtered[[i]]$sample <- sampleInfo[i, "samples_names"]
+    sObj_filtered[[i]]$sample
+    sObj_filtered[[i]] <- sObj_filtered[[i]][grep("^MT-", rownames(sObj_filtered[[i]]), invert = T)]
+    #cat(sObj_filtered[[i]]$sample)
+}
+names(sObj_filtered) <- sampleInfo$samples_names
+
+
+
+## pre-process data function
+clusterCells <- function(sObj){
+  sObj <- NormalizeData(sObj, normalization.method = "LogNormalize", scale.factor = 10000)
+  sObj <- ScaleData(object = sObj, features = rownames(sObj))
+  sObj <- FindVariableFeatures(sObj, nfeatures = 2000)
+  sObj <- RunPCA(object = sObj)
+  sObj <- FindNeighbors(object = sObj, dims = 1:20)
+  sObj <- FindClusters(object = sObj, resolution = c(0.2,0.4,0.6,0.8,1,1.2), reduction.type="cca.aligned")
+  sObj <- SetIdent(sObj, value = "RNA_snn_res.0.6" )
+  sObj <- RunUMAP(object = sObj, dims = 1:20)
+  return(sObj)
+}
+
+## pre-process data
+sObj_filtered <- lapply(sObj_filtered, clusterCells)
+
+## save data
+saveRDS(sObj_filtered, "rObjects/lu_2020/sObj_filtered_cluster.rds")
+
+```
+
+```{r}
+sObj_filtered <- readRDS("rObjects/lu_2020/sObj_filtered_cluster.rds")
+```
+
+```{r}
+plotUMAP <- function(sObj, res = 'RNA_snn_res.0.6'){
+  sObj <- SetIdent(sObj, value = res)
+  plotTitle <- unique(sObj$orig.ident)
+  p1 <- DimPlot(sObj, label = TRUE) + ggtitle(plotTitle)
+  return(p1)}
+
+lapply(sObj_filtered, plotUMAP)
+```
+
+```{r}
+DimPlot(sObj_filtered[[1]], group.by = "sample_name")
+```
+
+```{r, eval = F}
+sObj_merge <- SCTransform(sObj_filtered[[1]],
+                          verbose = TRUE,
+                          vars.to.regress = c("nFeature_RNA", "nCount_RNA"))
+```
+
+```{r, eval = F}
+sObj_merge <- RunPCA(sObj_merge,  npcs = 40, verbose = FALSE)
+ElbowPlot(sObj_merge)
+
+## use harmony to correct for differences between the samples.
+sObj_merge <- RunHarmony(sObj_merge, c( "sample_name"),  dims.use = 1:20, assay.use = "SCT")
+
+
+## perform clustering analysis on batch corrected object
+sObj_merge <- RunUMAP(sObj_merge, reduction = "harmony", dims = 1:20)
+sObj_merge <- FindNeighbors(sObj_merge, reduction = "harmony",  dims = 1:20, verbose = FALSE)
+sObj_merge <- FindClusters(sObj_merge, resolution = c(0.2, 0.4, 0.6, 0.8, 1.0), verbose = FALSE)
+
+saveRDS(sObj_merge, "rObjects/lu_2020/lu_2020_GSE116106_sObj.rds")
+```
+
+## After batch correction
+
+```{r}
+sObj_merge <- readRDS("rObjects/lu_2020/lu_2020_GSE116106_sObj.rds")
+
+DimPlot(sObj_merge, group.by = "sample_name")
+
+DimPlot(sObj_merge, group.by = "SCT_snn_res.0.6", label = T)
+
+```
+
+```{r, eval = F}
+system("mkdir -p csvFiles/lu_2020")
+res <- "SCT_snn_res.0.6"
+sObj_merge <- SetIdent(sObj_merge, value = res)
+
+markers <- FindAllMarkers(sObj_merge)
+
+markers <- markers %>% arrange(cluster, desc(avg_log2FC))
+
+write.csv(markers, file = paste0("csvFiles/lu_2020/lu_2020_GSE116106_", res, ".csv"))
+```
+
+```{r, eval = F}
+sObj <- readRDS("../seuratObj_retina_eye_annotated.rds")
+sObj$dataset <- "Dorgau"
+sObj_merge$dataset <- "Lu"
+
+sObj_lu_haem <- sObj_merge[grep("^HB(M|A|B)", rownames(sObj_merge), value = T),]
+cells_keep <- colnames(sObj_lu_haem)[colSums(sObj_lu_haem@assays$RNA@counts %>% as.data.frame()) == 0]
+
+sObj_lu <- sObj_merge[,cells_keep]
+sObj_lu$orig.ident <- sObj_lu$sample_name
+
+anno_df <- tibble(SCT_snn_res.0.6=0:19, annotation=c("Rods", "RPCs", "RGCs", "MC", "T2", "HCs", "BCs", "RPCs", "ACs", "T1", "BCs", "Photoreceptor_precursors", "BCs", "T3", "Cones", "Proilferating_RPCs", "Rods", "RGCs", "ACs", "Microglia"))
+
+anno_df
+
+sObj_lu$annotation <- NA
+
+for (i in seq(anno_df$SCT_snn_res.0.6)){
+    # i-1 because clusters start at 0
+    sObj_lu$annotation[sObj_lu$SCT_snn_res.0.6 == i-1] <- anno_df$annotation[i]
+}
+
+table(sObj_lu$annotation)
+
+DimPlot(sObj_lu, group.by = 'annotation', label = T)
+```
+
+```{r, eval = F}
+set.seed(1234)
+
+sObj_ds <- c(sObj, sObj_lu)
+
+sObj_merge <- merge(sObj_ds[[1]], sObj_ds[-1])
+```
+
+```{r, eval = FALSE}
+### pre-processing for harmony
+DefaultAssay(sObj_merge) <- "RNA"
+sObj_merge <- SCTransform(sObj_merge,
+                          verbose = TRUE,
+                          vars.to.regress = c("nFeature_RNA", "nCount_RNA", "percent.mt"))
+
+
+sObj_merge <- RunPCA(sObj_merge,  npcs = 40, verbose = FALSE)
+ElbowPlot(sObj_merge)
+
+sObj_merge <- RunHarmony(sObj_merge, c( "orig.ident", "dataset"),  dims.use = 1:20, assay.use = "SCT")
+
+sObj_merge <- RunUMAP(sObj_merge, reduction = "harmony", dims = 1:20)
+sObj_merge <- FindNeighbors(sObj_merge, reduction = "harmony",  dims = 1:20, verbose = FALSE)
+sObj_merge <- FindClusters(sObj_merge, resolution = c(0.2, 0.4, 0.6, 0.8, 1.0), verbose = FALSE)
+
+
+
+saveRDS(sObj_merge, "rObjects/sObj_dorgau_lu_integrated_clusters_labelled.rds")
+```
+
+## After integration w/ Dorgau
+
+With NA being the Lu dataset for the annotation UMAP.
+
+```{r}
+sObj_merge <- readRDS("rObjects/sObj_dorgau_lu_integrated_clusters_labelled.rds")
+
+sObj_merge$annotation <- stringr::str_to_lower(sObj_merge$annotation)
+
+sObj_merge$annotation[sObj_merge$annotation == "proilferating_rpcs"] <- "proliferating_rpcs"
+sObj_merge$annotation[sObj_merge$annotation == "mg"] <- "mc"
+sObj_merge$annotation[sObj_merge$annotation == "bps"] <- "bcs"
+
+
+sObj_merge$stage[sObj_merge$orig.ident == "GW12"] <- "10PCW"
+sObj_merge$stage[sObj_merge$orig.ident == "GW14"] <- "12PCW"
+sObj_merge$stage[sObj_merge$orig.ident == "GW16"] <- "14PCW"
+sObj_merge$stage[sObj_merge$orig.ident == "GW18"] <- "16PCW"
+sObj_merge$stage[sObj_merge$orig.ident == "GW20_macula"] <- "18PCW_macula"
+sObj_merge$stage[sObj_merge$orig.ident == "GW20_periphery"] <- "18PCW_periphery"
+sObj_merge$stage[sObj_merge$orig.ident == "GW22"] <- "20PCW"
+sObj_merge$stage[sObj_merge$orig.ident == "GW24_rep1"] <- "22PCW"
+sObj_merge$stage[sObj_merge$orig.ident == "GW24_rep2"] <- "22PCW"
+sObj_merge$stage[sObj_merge$orig.ident == "GW27"] <- "25PCW"
+
+
+
+DimPlot(sObj_merge, group.by = "dataset", label = T)
+DimPlot(sObj_merge, group.by = "SCT_snn_res.0.6", label = T, order = rev(0:20))
+p1 <- DimPlot(sObj_merge, group.by = "annotation",shuffle = T, label = T, split.by = 'dataset') + cols4all::scale_color_discrete_c4a_cat("poly.light24")
+p2 <- DimPlot(sObj_merge, group.by = "annotation",shuffle = T, label = T) + cols4all::scale_color_discrete_c4a_cat("poly.light24") 
+    
+DimPlot(sObj_merge, group.by = "stage", label = T) + cols4all::scale_color_discrete_c4a_cat("poly.light24") + cols4all::scale_color_discrete_c4a_cat("poly.light24")
+
+legend <- get_legend(p1)
+legend <- as_ggplot(legend)
+#p1 <- p1 + NoLegend()
+saveRDS(sObj_merge, "rObjects/sObj_dorgau_lu_integrated_clusters_labelled_fixed.rds")
+
+```
+
+```{r, fig.height=20, fig.width=18}
+(p2 / p1) + plot_layout(guides = 'collect')
+ggsave("lu_dorgau_integration.tiff")
+```
+
+Proportions of each dataset in each cluster:
+
+```{r}
+ggdf <- sObj_merge[[]] %>% 
+  select(dataset, SCT_snn_res.0.6) %>% 
+  group_by(dataset, SCT_snn_res.0.6) %>% 
+  summarise(number_cells = n()) %>% 
+  rename(cluster = SCT_snn_res.0.6)
+
+
+ggplot(ggdf, aes(dataset,number_cells )) + geom_bar(stat = "identity") + facet_wrap(~cluster)
+```
+
+```{r, eval = F}
+res <- "SCT_snn_res.0.6"
+sObj_merge <- SetIdent(sObj_merge, value = res)
+
+markers <- FindAllMarkers(sObj_merge, assay = 'RNA')
+
+markers <- markers %>% arrange(cluster, desc(avg_log2FC))
+
+write.csv(markers, file = paste0("csvFiles/dorgau_lu_integrated_", res, ".csv"))
+```
+
+```{r}
+anno_df <- tibble(0:19, c("Rods", "RPCs", "RGCs", "MC", "T2", "HCs", "BCs", "RPCs", "ACs", "T1", "BCs", "Photoreceptor_precursors", "BCs", "T3", "Cones", "Proilferating_RPCs", "Rods", "RGCs", "ACs", "Microglia"))
+
+anno_df |> knitr::kable(format = "markdown")
+```
+

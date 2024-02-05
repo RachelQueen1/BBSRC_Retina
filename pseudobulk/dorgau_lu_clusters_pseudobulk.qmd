@@ -1,0 +1,203 @@
+---
+title: "Dorgau_lu pseudobulk"
+format: 
+  html:
+    self-contained: true
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, fig.width = 10, fig.height = 10)
+
+```
+
+
+Can the new data be integrated successfully with previously published data or do they appear to be molecularly distinct in ways that can guide future human developmental studies? 
+
+
+```{r}
+library(Seurat)
+library(tidyverse)
+library(harmony)
+library(DoubletFinder)
+library(doParallel)
+library(patchwork)
+library(ggpubr)
+library(limma)
+library(DESeq2)
+library(pheatmap)
+library(ggrepel)
+
+howManyCells <- function(sObj){dim(sObj)[2]}
+
+registerDoParallel(8)
+
+### Functions
+preDoublets <- function(seuratObj){  
+    seuratObj <- NormalizeData(seuratObj)
+    
+    seuratObj <- ScaleData(seuratObj)
+    seuratObj <- FindVariableFeatures(seuratObj, 
+                                      x.low.cutoff = 0.0125, 
+                                      y.cutoff = 0.25, 
+                                      do.plot=FALSE)
+    seuratObj <- RunPCA(seuratObj, pc.genes = seuratObj@var.genes, pcs.print = 0)
+    
+    # set.seed(1234)
+    # seuratObj <- RunTSNE(seuratObj, dims.use = 1:10, verbose=TRUE)
+    return(seuratObj)
+}
+
+findDoublets <- function(seuratObj){
+    
+    ### calculate expected number of doublets
+    nExp_poi  <- round(0.15*nrow(seuratObj@meta.data))
+    
+    ### predict doublets
+    seuratObj <- doubletFinder_v3(seuratObj, 
+                                  PCs = 1:10, 
+                                  pN = 0.25, 
+                                  pK = 0.01, 
+                                  nExp = nExp_poi, 
+                                  reuse.pANN = FALSE, 
+                                  sct=FALSE)
+    
+    
+    seuratObj@meta.data <- seuratObj@meta.data %>% 
+        rename_at(vars(starts_with("DF.classifications")), 
+                  funs(str_replace(., ".*", "DF.classifications"))) %>%
+        rename_at(vars(starts_with("pANN")), 
+                  funs(str_replace(., ".*", "pANN")))
+    
+    return(seuratObj) 
+    
+}
+
+dir <- "results/lu_2020/"
+
+
+```
+
+```{r, eval = F}
+sObj_merge <- readRDS("rObjects/sObj_dorgau_lu_integrated_clusters_labelled_fixed.rds")
+
+sObj_merge$annotation_orig <- sObj_merge$annotation
+sObj_merge$annotation <- NA
+
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(0, 4, 11)] <- "RPCs"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(1, 20)] <- "ACs"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(2)] <- "photoreceptor_precursors"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(3)] <- "RGCs"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(5)] <- "T2"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(6)] <- "HCs"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(7)] <- "T3"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(8)] <- "cones"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(9)] <- "T1"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(10, 12)] <- "BCs"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(13)] <- "pRPCs"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(14, 16)] <- "rods"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(15)] <- "MCs"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(17)] <- "fibroblasts"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(19)] <- "proliferating_cells"
+sObj_merge$annotation[sObj_merge$SCT_snn_res.0.6 %in% c(18)] <- "microglia"
+
+DimPlot(sObj_merge, group.by = 'annotation', label = T)
+saveRDS(sObj_merge, "rObjects/sObj_dorgau_lu_integrated_clusters_labelled_fixed.rds")
+
+```
+
+```{r}
+sObj_merge <- readRDS("rObjects/sObj_dorgau_lu_integrated_clusters_labelled_fixed.rds")
+
+DimPlot(sObj_merge, group.by = 'annotation', label = T) + cols4all::scale_color_discrete_c4a_cat("poly.light24") + NoAxes()
+
+
+pseudo_bulk <- AggregateExpression(sObj_merge, assays = c("RNA", "SCT"), return.seurat = F, group.by = c("dataset", "annotation"), slot = 'counts')
+
+```
+
+## Pseudobulk
+
+Generate psuedobulk samples for each cell type in each dataset (using raw counts):
+
+```{r}
+counts <- pseudo_bulk[['RNA']]
+samples <- colnames(counts)
+md <- data.frame(sample_name = samples , cell_type = gsub("Dorgau_|Lu_", "", samples), dataset = gsub("_.*", "", samples))
+md$cell_type[md$cell_type == "MCs"] <- "MG"
+row.names(md) <- md$sample_name
+
+ 
+md |> knitr::kable(format = "markdown")
+#all(rownames(md) == colnames(counts))        
+```
+
+
+```{r}
+dds <- DESeqDataSetFromMatrix(counts, 
+                              colData = md, 
+                              design = ~ cell_type + dataset)
+
+#rld <- rlog(dds, blind=TRUE)
+
+# Plot PCA
+
+#DESeq2::plotPCA(rld, intgroup = c("dataset"))
+
+#rld_mat <- assay(rld)
+#rld_cor <- cor(rld_mat)
+
+# Plot heatmap
+#pheatmap(rld_cor, annotation = md[, c("cell_type", "dataset"), drop=F])
+```
+
+Samples are clearly batched:
+
+```{r}
+# https://support.bioconductor.org/p/76099/#93176
+
+vsd <- vst(dds)
+plotPCA(vsd, "dataset")
+assay(vsd) <- limma::removeBatchEffect(assay(vsd), vsd$dataset)
+
+```
+
+After batch correcting for dataset:
+
+```{r}
+plotPCA(vsd, "dataset")
+pca <- plotPCA(vsd, c("cell_type", "dataset"), returnData = T)
+```
+
+```{r}
+#pca
+```
+
+Samples are no longer batched, and each cell type groups together pretty well on the PCA:
+
+```{r}
+ggplot(pca) + aes(x = PC1, y = PC2, colour = cell_type, shape = dataset) + geom_point(size = 3) +  cols4all::scale_color_discrete_c4a_cat("poly.dark24") + theme_bw()
+
+ggplot(pca) + aes(x = PC1, y = PC2, colour = cell_type, shape = dataset) + geom_point(size = 3) + geom_label_repel(aes(label = cell_type), max.overlaps = 20)  + cols4all::scale_color_discrete_c4a_cat("poly.dark24") + theme_bw()
+
+# ggplot(pca) + aes(x = PC1, y = PC2, colour = dataset) + geom_text(aes(label = cell_type), size = 3)  + cols4all::scale_color_discrete_c4a_cat("poly.dark24") + theme_bw()
+
+ggplot(pca) + aes(x = PC1, y = PC2, colour = cell_type, shape = dataset, group = cell_type) + geom_point(size = 3) + geom_line() + cols4all::scale_color_discrete_c4a_cat("poly.dark24") + theme_bw()
+
+ggplot(pca) + aes(x = PC1, y = PC2, colour = cell_type, shape = dataset, group = cell_type) + geom_point(size = 3) + geom_line() + geom_label_repel(aes(label = cell_type), max.overlaps = 20) + cols4all::scale_color_discrete_c4a_cat("poly.dark24") + theme_bw()
+```
+
+
+```{r, eval = F}
+vsd_mat <- assay(vsd)
+vsd_cor <- cor(vsd_mat)
+
+# Plot heatmap
+pheatmap(vsd_cor, annotation = md[, c("cell_type", "dataset"), drop=F])
+```
+
+
+
+```{r}
+sessionInfo()
+```
+
