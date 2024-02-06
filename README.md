@@ -110,13 +110,13 @@ The scripts presented here don't require installation to run (no extra installat
 
 ## Spatial Analysis
 
-1.  Spatial/individual_results.rmd
+1.  Spatial/individual_results.rmd (**Table S3**)
 
-2.  Spatial/fetal_retina/hiRes.Rmd
+2.  Spatial/fetal_retina/hiRes.Rmd (**Figure 2 & 3**)
 
 ## Network Analysis
 
-Numbered scripts in the SCENIC directory were run to create the SCENIC networks shown in Figure
+Numbered scripts in the SCENIC directory were run to create the SCENIC networks shown in **Figure S7B**
 
 ## Analysis Time
 
